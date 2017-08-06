@@ -11,12 +11,13 @@ module.exports = [
 
     output: {
       filename: "bundle.js",
-      path: path.join(__dirname, '/../dist/server')
+      path: path.join(__dirname, '/../dist/server'),
+      libraryTarget: 'commonjs'
     },
 
     devtool: 'source-map',
 
-    externals: webpackCommon.buildExternals(),
+    externals: [webpackCommon.buildExternals()],
 
     target: 'node',
 

@@ -43,7 +43,7 @@ module.exports = {
 
   target: 'node',
 
-  externals: [webpackCommon.buildExternals()],
+  externals: webpackCommon.buildExternals(),
 
   node: {
     __dirname: false,

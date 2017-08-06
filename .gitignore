@@ -8,3 +8,4 @@ todo.md
 tmp
 demo
 *.tmp
+.nyc_output
