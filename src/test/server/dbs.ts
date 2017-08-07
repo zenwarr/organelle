@@ -4,7 +4,8 @@ import * as tmp from 'tmp';
 import * as chai from 'chai';
 import * as chaiAsPromised from "chai-as-promised";
 import {DatabaseWithOptions} from "../../server/db";
-import {GroupType, KnownGroupTypes, LibraryDatabase} from "../../server/library-db";
+import {GroupType, KnownGroupTypes, LibraryDatabase, PersonRelation} from "../../server/library-db";
+import uuid = require("uuid");
 
 should();
 chai.use(chaiAsPromised);
@@ -187,10 +188,10 @@ describe("LibraryDatabase", function () {
       let db = new LibraryDatabase(':memory:');
       await db.create();
 
-      let gt = db.getGroupType(KnownGroupTypes.Tags);
+      let gt = db.getGroupType(KnownGroupTypes.Tag);
       expect(gt).not.to.be.null;
       if (gt != null) {
-        expect(gt.uuid).to.be.equal(KnownGroupTypes.Tags);
+        expect(gt.uuid).to.be.equal(KnownGroupTypes.Tag);
       }
     });
   });
@@ -204,17 +205,17 @@ describe("LibraryDatabase", function () {
     });
 
     it("should add group types", async function () {
-      let newType = await db.addGroupType({ uuid: null, name: 'custom group type', indexable: false, exclusive: true });
+      let newType = await db.addGroupType({ uuid: null, name: 'custom group type', ordered: false, exclusive: true });
       expect(newType.uuid).to.not.be.null;
       expect(newType.name).to.be.equal('custom group type');
-      expect(newType.indexable).to.be.false;
+      expect(newType.ordered).to.be.false;
       expect(newType.exclusive).to.be.true;
     });
 
     it("should remove group types", async function () {
-      expect(db.getGroupType(KnownGroupTypes.Languages)).to.not.be.null;
-      await db.removeGroupType(KnownGroupTypes.Languages);
-      expect(db.getGroupType(KnownGroupTypes.Languages)).to.be.null;
+      expect(db.getGroupType(KnownGroupTypes.Language)).to.not.be.null;
+      await db.removeGroupType(KnownGroupTypes.Language);
+      expect(db.getGroupType(KnownGroupTypes.Language)).to.be.null;
     });
 
     it("should not allow removing nonexistent group types", async function () {
@@ -224,19 +225,19 @@ describe("LibraryDatabase", function () {
     });
 
     it("should update types", async function () {
-      let oldType = db.getGroupType(KnownGroupTypes.Tags);
+      let oldType = db.getGroupType(KnownGroupTypes.Tag);
       expect(oldType).to.have.property('name', 'tags');
 
-      let modType = await db.updateGroupType({ uuid: KnownGroupTypes.Tags, name: 'new name for tags',
-              indexable: true, exclusive: true });
-      expect(modType.uuid).to.be.equal(KnownGroupTypes.Tags);
+      let modType = await db.updateGroupType({ uuid: KnownGroupTypes.Tag, name: 'new name for tags',
+              ordered: true, exclusive: true });
+      expect(modType.uuid).to.be.equal(KnownGroupTypes.Tag);
       expect(modType.name).to.be.equal('new name for tags');
 
       expect(oldType).to.have.property('name', 'tags');
-      expect(oldType).to.have.property('uuid', KnownGroupTypes.Tags);
+      expect(oldType).to.have.property('uuid', KnownGroupTypes.Tag);
 
-      let retType = db.getGroupType(KnownGroupTypes.Tags);
-      expect(retType).to.have.property('uuid', KnownGroupTypes.Tags);
+      let retType = db.getGroupType(KnownGroupTypes.Tag);
+      expect(retType).to.have.property('uuid', KnownGroupTypes.Tag);
       expect(retType).to.have.property('name', 'new name for tags');
     });
   });
@@ -334,4 +335,256 @@ describe("LibraryDatabase", function () {
       });
     });
   });
+
+  describe("Relations", function () {
+    let db: LibraryDatabase;
+
+    beforeEach(async function () {
+      // db = new LibraryDatabase(tmp.fileSync().name);
+      db = new LibraryDatabase(':memory:');
+      await db.create();
+
+      await fillTestData(db);
+    });
+
+    it("should add relations between resource and author", async function () {
+      await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+
+      let related = await db.relatedPersons(MIST);
+      expect(related).to.not.be.null;
+      expect(related).to.have.lengthOf(1);
+      expect(related[0]).to.not.be.null;
+      expect(related[0].uuid).to.be.equal(KING);
+
+      await db.addPersonRelation(TOLL, HEMINGWAY, PersonRelation.Author);
+
+      let related2 = await db.relatedPersons(TOLL);
+      expect(related2).to.not.be.null;
+      expect(related2).to.have.lengthOf(1);
+      expect(related2[0]).to.not.be.null;
+      expect(related2[0].uuid).to.be.equal(HEMINGWAY);
+    });
+
+    it("should not add duplicate relations", async function () {
+      await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+      await db.addPersonRelation(MIST, KING, PersonRelation.Editor);
+      return db.addPersonRelation(MIST, KING, PersonRelation.Author).should.be.rejected;
+    });
+
+    describe("More person relations", function () {
+      beforeEach(async function () {
+        await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+        await db.addPersonRelation(MIST, PERSON1, PersonRelation.Editor);
+        await db.addPersonRelation(MIST, PERSON2, PersonRelation.Editor);
+        await db.addPersonRelation(MIST, PERSON2, PersonRelation.Translator);
+      });
+
+      it("should query relations of specific type", async function () {
+        let rel = await db.relatedPersons(MIST, PersonRelation.Translator);
+        expect(rel).to.have.lengthOf(1);
+        expect(rel[0]).to.have.property('uuid', PERSON2);
+      });
+
+      it("should query multiple relations of specific type", async function () {
+        let rel = await db.relatedPersons(MIST, PersonRelation.Editor);
+        expect(rel).to.have.lengthOf(2);
+        expect(rel[0].uuid).to.be.oneOf([PERSON1, PERSON2]);
+        expect(rel[1].uuid).to.be.oneOf([PERSON1, PERSON2]);
+        expect(rel[0].uuid).to.not.be.equal(rel[1].uuid);
+      });
+
+      it("should remove specific relation", async function () {
+        let relBefore = await db.relatedPersons(MIST);
+        expect(relBefore).to.have.lengthOf(4);
+
+        await db.removePersonRelations(MIST, PERSON2, PersonRelation.Editor);
+
+        let relAfter = await db.relatedPersons(MIST);
+        expect(relAfter).to.have.lengthOf(3);
+      });
+    });
+
+    it("should add relations between resource and group", async function () {
+      await db.addGroupRelation(MIST, LANG_RUSSIAN);
+
+      let rel = await db.relatedGroups(MIST);
+
+      expect(rel).to.not.be.null;
+      expect(rel).to.have.lengthOf(1);
+      expect(rel[0]).to.not.be.null;
+      expect(rel[0].uuid).to.be.equal(LANG_RUSSIAN);
+    });
+
+    it('should not add two relations between exclusive group types', async function () {
+      await db.addGroupRelation(MIST, CATEGORY1);
+      return db.addGroupRelation(MIST, CATEGORY2).should.be.rejected;
+    });
+
+    it("should not add duplicate relations even for non-exclusive types", async function () {
+      await db.addGroupRelation(MIST, TAG1);
+      return db.addGroupRelation(MIST, TAG1).should.be.rejected;
+    });
+
+    it("should not add group index to non-ordered groups", async function () {
+      db.addGroupRelation(MIST, TAG1, 10).should.be.rejected;
+    });
+
+    it("should not add a relation to non-existent group", async function () {
+      db.addGroupRelation(MIST, TEST_UUID2).should.be.rejected;
+    });
+
+    it("should remove group relations", async function () {
+      await db.addGroupRelation(MIST, LANG_ENGLISH);
+      expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(1);
+
+      await db.removeGroupRelations(MIST, LANG_ENGLISH);
+      expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(0);
+    });
+
+    it("should remove relations of specific group type", async function () {
+      await db.addGroupRelation(MIST, TAG1);
+      await db.addGroupRelation(MIST, TAG2);
+      await db.addGroupRelation(MIST, LANG_ENGLISH);
+      await db.addGroupRelation(MIST, LANG_RUSSIAN);
+      await db.addGroupRelation(MIST, CATEGORY1);
+
+      expect(await db.relatedGroups(MIST)).to.have.lengthOf(5);
+
+      await db.removeGroupRelations(MIST, undefined, db.getGroupType(KnownGroupTypes.Language) as GroupType);
+
+      expect(await db.relatedGroups(MIST)).to.have.lengthOf(3);
+    });
+  });
 });
+
+const MIST = uuid.v4(),
+      TOLL = uuid.v4(),
+      MOCKINGBIRD = uuid.v4(),
+      KING = uuid.v4(),
+      HEMINGWAY = uuid.v4(),
+      LEE = uuid.v4(),
+      PERSON1 = uuid.v4(),
+      PERSON2 = uuid.v4(),
+      PERSON3 = uuid.v4(),
+      TAG1 = uuid.v4(),
+      TAG2 = uuid.v4(),
+      LANG_ENGLISH = uuid.v4(),
+      LANG_RUSSIAN = uuid.v4(),
+      CATEGORY1 = uuid.v4(),
+      CATEGORY2 = uuid.v4();
+
+async function fillTestData(db: LibraryDatabase) {
+  await db.addResource({
+    uuid: MIST,
+    title: "The Mist",
+    titleSort: "Mist, The",
+    rating: 400,
+    addDate: new Date(),
+    lastModifyDate: new Date(),
+    publishDate: "1980",
+    publisher: "Viking Press",
+    desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters."
+  });
+
+  await db.addResource({
+    uuid: TOLL,
+    title: "For Whom the Bell Tolls",
+    titleSort: "For Whom the Bell Tolls",
+    rating: 400,
+    addDate: new Date(),
+    lastModifyDate: new Date(),
+    publishDate: "1940",
+    publisher: "Charles Scribner's Sons",
+    desc: "For Whom the Bell Tolls is a novel by Ernest Hemingway published in 1940. It tells the story of Robert Jordan, a young American in the International Brigades attached to a republican guerrilla unit during the Spanish Civil War."
+  });
+
+  await db.addResource({
+    uuid: MOCKINGBIRD,
+    title: "To Kill a Mockingbird",
+    titleSort: "Kill a Mockingbird, To",
+    rating: 400,
+    addDate: new Date(),
+    lastModifyDate: new Date(),
+    publishDate: "1960",
+    publisher: "",
+    desc: "To Kill a Mockingbird is a novel by Harper Lee published in 1960. It was immediately successful, winning the Pulitzer Prize, and has become a classic of modern American literature."
+  });
+
+  await db.addPerson({
+    uuid: KING,
+    name: 'Stephen King',
+    nameSort: 'King, Stephen'
+  });
+
+  await db.addPerson({
+    uuid: HEMINGWAY,
+    name: 'Ernest Hemingway',
+    nameSort: 'Hemingway, Ernest'
+  });
+
+  await db.addPerson({
+    uuid: LEE,
+    name: "Harper Lee",
+    nameSort: "Lee, Harper"
+  });
+
+  await db.addPerson({
+    uuid: PERSON1,
+    name: 'Person 1',
+    nameSort: 'Person 1'
+  });
+
+  await db.addPerson({
+    uuid: PERSON2,
+    name: 'Person 2',
+    nameSort: 'Person 2'
+  });
+
+  await db.addPerson({
+    uuid: PERSON3,
+    name: 'Person 3',
+    nameSort: 'Person 3'
+  });
+
+  await db.addGroup({
+    uuid: TAG1,
+    groupType: db.getGroupType(KnownGroupTypes.Tag) as GroupType,
+    title: 'tag 1',
+    titleSort: 'tag 1'
+  });
+
+  await db.addGroup({
+    uuid: TAG2,
+    groupType: db.getGroupType(KnownGroupTypes.Tag) as GroupType,
+    title: 'tag 2',
+    titleSort: 'tag 2'
+  });
+
+  await db.addGroup({
+    uuid: LANG_ENGLISH,
+    groupType: db.getGroupType(KnownGroupTypes.Language) as GroupType,
+    title: 'english',
+    titleSort: 'english'
+  });
+
+  await db.addGroup({
+    uuid: LANG_RUSSIAN,
+    groupType: db.getGroupType(KnownGroupTypes.Language) as GroupType,
+    title: 'russian',
+    titleSort: 'russian'
+  });
+
+  await db.addGroup({
+    uuid: CATEGORY1,
+    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    title: 'group 1',
+    titleSort: 'group 1'
+  });
+
+  await db.addGroup({
+    uuid: CATEGORY2,
+    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    title: 'group 2',
+    titleSort: 'group 2'
+  });
+}

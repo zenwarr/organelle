@@ -49,6 +49,13 @@ export class Database {
       throw new Error('Cannot create/open already initialized database');
     }
   }
+
+  protected static _validateId(uuid: string|null): string {
+    if (uuid == null || uuid.length === 0) {
+      throw new Error('Invalid or empty UUID');
+    }
+    return uuid.toLowerCase().trim();
+  }
 }
 
 export class DatabaseWithOptions extends Database {
