@@ -1,5 +1,6 @@
 import {Database, DatabaseWithOptions} from './db';
 import * as uuid from 'uuid';
+import {dateToTimestamp, timestampToDate} from "./common";
 
 export const CUR_LIBRARY_VERSION = 1;
 
@@ -33,12 +34,12 @@ export interface Resource {
   /**
    * Indicates when the resource have been added to a library.
    */
-  addDate: Date;
+  addDate?: Date;
 
   /**
    * Indicates when the resource have been updated last time.
    */
-  lastModifyDate: Date;
+  lastModifyDate?: Date;
 
   /**
    * Publication date for a resource. It is not a timestamp, but just a text, because in most cases you cannot
@@ -48,7 +49,7 @@ export interface Resource {
    * information is useless and some people want to provide more precise information on book contents itself).
    * You still can store a Date object here, and it will be correctly handled.
    */
-  publishDate: string;
+  publishDate: string|Date;
 
   /**
    * Publisher, if it makes any sense to the resource.
@@ -334,7 +335,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<Resource>} Resource object that has been added.
    */
   addResource(res: Resource): Promise<Resource> {
-    return this._addEntry(res, ResourceSpec);
+    let curDate = new Date();
+    return this._addEntry({ ...res, addDate: curDate, lastModifyDate: curDate }, ResourceSpec);
   }
 
   /**
@@ -345,7 +347,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * as an argument.
    */
   updateResource(res: Resource): Promise<Resource> {
-    return this._updateEntry(res, ResourceSpec);
+    let curDate = new Date();
+    return this._updateEntry({ ...res, lastModifyDate: curDate, addDate: undefined }, ResourceSpec,
+        [ 'addDate' ]);
   }
 
   /**
@@ -650,7 +654,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return entry;
   }
 
-  protected async _updateEntry<T extends { uuid: string|null } & { [name: string]: any }>(entry: T, spec: EntrySpec): Promise<T> {
+  protected async _updateEntry<T extends { uuid: string|null } & { [name: string]: any }>
+                  (entry: T, spec: EntrySpec, propsToIgnore?: string[]): Promise<T> {
     if (entry.uuid == null || entry.uuid.length === 0) {
       throw new Error(`Cannot update ${spec.human}: invalid UUID`);
     }
@@ -661,7 +666,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
       throw new Error(`Invalid entry spec for ${spec.human}`);
     }
 
-    let setClause = mappings.map(item => item.column).join(' = ?, ') + ' = ?';
+    if (propsToIgnore != null) {
+      mappings = mappings.filter(item => propsToIgnore.indexOf(item.prop) < 0);
+    }
+
+    let setClause = mappings.map(item => item.column + ' = ?').join(', ');
 
     let bound = mappings.map(item => spec.valueToDb(entry[item.prop], item.prop));
     bound.push(entryUuid);
@@ -772,14 +781,6 @@ class EntrySpec {
   }
 }
 
-function timestampToDate(timestamp: number): Date {
-  return new Date(timestamp * 1000);
-}
-
-function dateToTimestamp(date: Date): number {
-  return Math.round(date.getTime() / 1000);
-}
-
 const ResourceSpec = new EntrySpec('resources', 'resource', {
   title: 'title',
   titleSort: 'title_sort',
@@ -789,12 +790,21 @@ const ResourceSpec = new EntrySpec('resources', 'resource', {
   publishDate: 'publish_date',
   publisher: 'publisher',
   desc: 'desc'
-}, {
+}, { // from database
   addDate: timestampToDate,
-  lastModifyDate: timestampToDate
-}, {
+  lastModifyDate: timestampToDate,
+  publishDate: (value: string): string|Date => {
+    if (value.startsWith('ts:')) {
+      let ts = parseInt(value.slice(3), 10);
+      return isNaN(ts) ? value : timestampToDate(ts);
+    } else {
+      return value;
+    }
+  }
+}, { // to database
   addDate: dateToTimestamp,
-  lastModifyDate: dateToTimestamp
+  lastModifyDate: dateToTimestamp,
+  publishDate: (value: string|Date): string => (value instanceof Date ? 'ts:' + dateToTimestamp(value) : value)
 });
 
 const PersonSpec = new EntrySpec('persons', 'person', {
@@ -803,7 +813,7 @@ const PersonSpec = new EntrySpec('persons', 'person', {
 }, {}, {});
 
 /**
- * This function is only exists because of TypeScript bug preventing from using object spread operator in form
+ * This function only exists because of TypeScript bug preventing from using object spread operator in form
  * of 'return { ...obj, uuid: uuid }
  * https://github.com/Microsoft/TypeScript/issues/13557
  * As soon as the issue will be fixed, this function needs to be removed.

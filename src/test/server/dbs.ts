@@ -4,8 +4,10 @@ import * as tmp from 'tmp';
 import * as chai from 'chai';
 import * as chaiAsPromised from "chai-as-promised";
 import {DatabaseWithOptions} from "../../server/db";
-import {GroupType, KnownGroupTypes, LibraryDatabase, PersonRelation} from "../../server/library-db";
+import {GroupType, KnownGroupTypes, LibraryDatabase, PersonRelation, Resource} from "../../server/library-db";
 import uuid = require("uuid");
+import {dateToTimestamp} from "../../server/common";
+import * as sinon from 'sinon';
 
 should();
 chai.use(chaiAsPromised);
@@ -453,6 +455,142 @@ describe("LibraryDatabase", function () {
       await db.removeGroupRelations(MIST, undefined, db.getGroupType(KnownGroupTypes.Language) as GroupType);
 
       expect(await db.relatedGroups(MIST)).to.have.lengthOf(3);
+    });
+  });
+
+  describe("Time handling", function () {
+    let db: LibraryDatabase;
+    let clock: sinon.SinonFakeTimers;
+
+    beforeEach(function () {
+      clock = sinon.useFakeTimers();
+
+      db = new LibraryDatabase(':memory:');
+      return db.create();
+    });
+
+    afterEach(function () {
+      clock.restore();
+    });
+
+    it("addDate and lastModifyDate should be ignored", async function () {
+      let date = new Date();
+
+      clock.tick(10000);
+
+      let datePast = new Date();
+
+      await db.addResource({
+        uuid: TEST_UUID,
+        title: 'some title',
+        titleSort: 'some title sort',
+        rating: 0,
+        addDate: date,
+        lastModifyDate: date,
+        publishDate: '',
+        publisher: '',
+        desc: ''
+      });
+
+      let res = await db.getResource(TEST_UUID) as Resource;
+      expect(res.uuid).to.be.equal(TEST_UUID);
+      expect(dateToTimestamp(res.addDate as Date)).to.be.equal(dateToTimestamp(datePast));
+      expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(dateToTimestamp(datePast));
+    });
+
+    it("should store adding date to addDate", async function () {
+      clock.tick(10000);
+
+      await db.addResource({
+        uuid: TEST_UUID,
+        title: 'some title',
+        titleSort: 'some title sort',
+        rating: 0,
+        addDate: undefined,
+        lastModifyDate: undefined,
+        publishDate: '',
+        publisher: '',
+        desc: ''
+      });
+
+      let res = await db.getResource(TEST_UUID) as Resource;
+      expect(dateToTimestamp(res.addDate as Date)).to.be.equal(10);
+      expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(10);
+    });
+
+    it("should save modification date", async function () {
+      clock.tick(10000);
+
+      await db.addResource({
+        uuid: TEST_UUID,
+        title: 'some title',
+        titleSort: 'some title sort',
+        rating: 0,
+        addDate: undefined,
+        lastModifyDate: undefined,
+        publishDate: '',
+        publisher: '',
+        desc: ''
+      });
+
+      clock.tick(10000);
+
+      await db.updateResource({
+        uuid: TEST_UUID,
+        title: 'some title 2',
+        titleSort: 'some title sort',
+        rating: 0,
+        addDate: undefined,
+        lastModifyDate: undefined,
+        publishDate: '',
+        publisher: '',
+        desc: ''
+      });
+
+      let res = await db.getResource(TEST_UUID) as Resource;
+      expect(dateToTimestamp(res.addDate as Date)).to.be.equal(10);
+      expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(20);
+    });
+
+    it('should store publishDate as a Date', async function () {
+      let date = new Date();
+
+      await db.addResource({
+        uuid: TEST_UUID,
+        title: 'some title',
+        titleSort: 'some title sort',
+        rating: 0,
+        addDate: date,
+        lastModifyDate: date,
+        publishDate: date,
+        publisher: '',
+        desc: ''
+      });
+
+      let res = await db.getResource(TEST_UUID) as Resource;
+      expect(res.uuid).to.be.equal(TEST_UUID);
+      expect(res.publishDate).to.be.instanceOf(Date);
+      expect(dateToTimestamp(res.publishDate as Date)).to.be.equal(dateToTimestamp(date));
+    });
+
+    it("should store publishDate as a string", async function () {
+      let date = new Date();
+
+      await db.addResource({
+        uuid: TEST_UUID,
+        title: 'some title',
+        titleSort: 'some title sort',
+        rating: 0,
+        addDate: date,
+        lastModifyDate: date,
+        publishDate: '5th century',
+        publisher: '',
+        desc: ''
+      });
+
+      let res = await db.getResource(TEST_UUID) as Resource;
+      expect(res.uuid).to.be.equal(TEST_UUID);
+      expect(res.publishDate as string).to.be.equal('5th century');
     });
   });
 });
