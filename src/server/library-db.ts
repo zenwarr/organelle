@@ -8,7 +8,7 @@ export const CUR_LIBRARY_VERSION = 1;
  * Resources are basic building blocks of a library. Any book or article or a magazine issue you store is a Resource.
  */
 export interface Resource {
-  uuid: string|null;
+  uuid?: string|null;
 
   /**
    * Title of a resource that is displayed to user.
@@ -28,8 +28,9 @@ export interface Resource {
    * completely normal. To keep away from rounding issues, rating is stored in form of an integer
    * as (real_rating * 100). So 4.3 will be stored in this property as an 430. Keep it in mind while showing
    * rating to a user.
+   * Value of this field should be in [0...500] range (inclusive).
    */
-  rating: number;
+  rating?: number;
 
   /**
    * Indicates when the resource have been added to a library.
@@ -49,24 +50,24 @@ export interface Resource {
    * information is useless and some people want to provide more precise information on book contents itself).
    * You still can store a Date object here, and it will be correctly handled.
    */
-  publishDate: string|Date;
+  publishDate?: string|Date;
 
   /**
    * Publisher, if it makes any sense to the resource.
    */
-  publisher: string;
+  publisher?: string;
 
   /**
    * Description of the resource.
    */
-  desc: string;
+  desc?: string;
 }
 
 /**
  * Any person that should be mentioned in library (author, translator or editor) is represented by such objects.
  */
 export interface Person {
-  uuid: string|null;
+  uuid?: string|null;
 
   /**
    * Name of a person.
@@ -101,7 +102,7 @@ export interface RelatedPerson extends Person {
  * and this group. You can create you own groups.
  */
 export interface Group {
-  uuid: string|null;
+  uuid?: string|null;
 
   /**
    * Group title
@@ -123,6 +124,9 @@ export interface Group {
  * An extended version of a Group that mentions index a resource has in a group it relates to.
  */
 export interface RelatedGroup extends Group {
+  /**
+   * Group index should be always positive or null. Any negative value will be ignored.
+   */
   groupIndex: number|null;
 }
 
@@ -131,7 +135,7 @@ export interface RelatedGroup extends Group {
  * You can create you own group types, create groups of this type and link resources to these groups.
  */
 export interface GroupType {
-  uuid: string|null;
+  uuid?: string|null;
 
   /**
    * Type name
@@ -204,15 +208,15 @@ export class LibraryDatabase extends DatabaseWithOptions {
         `CREATE TABLE persons(uuid TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, name_sort TEXT NOT NULL)`,
         `CREATE TABLE res_to_persons(res_id TEXT NOT NULL, person_id TEXT NOT NULL, relation INTEGER NOT NULL,
               UNIQUE(res_id, person_id, relation),
-              FOREIGN KEY(res_id) REFERENCES resources(uuid),
-              FOREIGN KEY(person_id) REFERENCES persons(uuid))`,
+              FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT,
+              FOREIGN KEY(person_id) REFERENCES persons(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
         `CREATE TABLE group_types(uuid TEXT PRIMARY KEY, name TEXT UNIQUE, exclusive BOOLEAN, ordered BOOLEAN)`,
         `CREATE TABLE groups(uuid TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, title_sort TEXT NOT NULL,
-              FOREIGN KEY(type) REFERENCES group_types(uuid))`,
+              FOREIGN KEY(type) REFERENCES group_types(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
         `CREATE TABLE res_to_groups(res_id TEXT NOT NULL, group_id TEXT NOT NULL, group_index INTEGER NOT NULL,
               UNIQUE(res_id, group_id, group_index),
-              FOREIGN KEY(res_id) REFERENCES resources(uuid),
-              FOREIGN KEY(group_id) REFERENCES groups(uuid))`,
+              FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT,
+              FOREIGN KEY(group_id) REFERENCES groups(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
     ];
 
     for (let query of SCHEMA) {
@@ -623,6 +627,16 @@ export class LibraryDatabase extends DatabaseWithOptions {
     groupType: (groupType: string) => this.getGroupType(groupType)
   }, {
     groupType: (groupType: GroupType) => groupType.uuid
+  }, {
+    title: PropValidators.String,
+    titleSort: PropValidators.String,
+    groupType: (value: any): boolean => {
+      return value != null && value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0
+    }
+  }, {
+    title: PropValidators.String,
+    titleSort: PropValidators.String,
+    groupType: (value: any): boolean => typeof value === 'string' && value.length > 0
   });
 
   protected async _loadGroupTypes(): Promise<void> {
@@ -654,7 +668,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return entry;
   }
 
-  protected async _updateEntry<T extends { uuid: string|null } & { [name: string]: any }>
+  protected async _updateEntry<T extends { uuid?: string|null } & { [name: string]: any }>
                   (entry: T, spec: EntrySpec, propsToIgnore?: string[]): Promise<T> {
     if (entry.uuid == null || entry.uuid.length === 0) {
       throw new Error(`Cannot update ${spec.human}: invalid UUID`);
@@ -684,7 +698,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return workaroundSpread(entry, entryUuid);
   }
 
-  protected async _addEntry<T extends { uuid: string|null } & { [name: string]: any }>(entry: T, spec: EntrySpec): Promise<T> {
+  protected async _addEntry<T extends { uuid?: string|null } & { [name: string]: any }>(entry: T, spec: EntrySpec): Promise<T> {
     let entryUuid: string;
     if (entry.uuid == null || entry.uuid.length === 0) {
       entryUuid = uuid.v4().toLowerCase();
@@ -722,7 +736,9 @@ class EntrySpec {
   constructor(public table: string, public human: string,
               protected _mappings: { [name: string]: string },
               protected _fromDbHandlers: { [name: string]: (value: any) => any },
-              protected _toDbHandlers: { [name: string]: (value: any) => any }
+              protected _toDbHandlers: { [name: string]: (value: any) => any},
+              protected _toDbValidators: { [name: string]: PropValidator },
+              protected _fromDbValidators: { [name: string]: PropValidator }
               ) { }
 
   propToColumnName(prop: string): string {
@@ -754,10 +770,16 @@ class EntrySpec {
 
   valueFromDb(value: any, columnName: string): any {
     let propName = this.columnToPropName(columnName);
+    if (!this.validateFromDb(value, propName)) {
+      throw new Error(`Database value is invalid: ${value}`);
+    }
     return this._fromDbHandlers[propName] == null ? value : this._fromDbHandlers[propName](value);
   }
 
   valueToDb(value: any, propName: string): any {
+    if (!this.validateToDb(value, propName)) {
+      throw new Error(`Value for property ${propName} is invalid: ${value}`);
+    }
     return this._toDbHandlers[propName] == null ? value : this._toDbHandlers[propName](value);
   }
 
@@ -779,6 +801,54 @@ class EntrySpec {
       }
     });
   }
+
+  validateToDb(value: any, propName: string): boolean {
+    if (this._toDbValidators[propName] == null) {
+      return true;
+    } else {
+      return this._toDbValidators[propName](value);
+    }
+  }
+
+  validateFromDb(value: any, propName: string): boolean {
+    if (this._fromDbValidators[propName] == null) {
+      return true;
+    } else {
+      return this._fromDbValidators[propName](value);
+    }
+  }
+}
+
+type PropValidator = (value: any) => boolean;
+
+namespace PropValidators {
+  function ofClass(value: any, className: string): boolean {
+    return Object.prototype.toString.call(value) === '[object ' + className + ']';
+  }
+
+  export const String = (value: any): boolean => typeof value == 'string' || ofClass(value, 'String');
+  export const Number = (value: any): boolean => typeof value == 'number' || ofClass(value, 'Number');
+  export const Boolean = (value: any): boolean => typeof value == 'boolean' || ofClass(value, 'Boolean');
+  export const Date = (value: any): boolean => ofClass(value, 'Date');
+  export const Empty = (value: any): boolean => value === null || value === undefined;
+
+  export function OneOf(...validators: PropValidator[]): PropValidator {
+    return function(value: any): boolean {
+      return validators.some(validator => validator(value));
+    }
+  }
+
+  export function Both(...validators: PropValidator[]): PropValidator {
+    return function(value: any): boolean {
+      return validators.every(validator => validator(value));
+    }
+  }
+
+  export function OfClass(className: string): PropValidator {
+    return function(value: any): boolean {
+      return ofClass(value, className);
+    }
+  }
 }
 
 const ResourceSpec = new EntrySpec('resources', 'resource', {
@@ -793,7 +863,10 @@ const ResourceSpec = new EntrySpec('resources', 'resource', {
 }, { // from database
   addDate: timestampToDate,
   lastModifyDate: timestampToDate,
-  publishDate: (value: string): string|Date => {
+  publishDate: (value: string): string|Date|null => {
+    if (value == null) {
+      return null;
+    }
     if (value.startsWith('ts:')) {
       let ts = parseInt(value.slice(3), 10);
       return isNaN(ts) ? value : timestampToDate(ts);
@@ -805,12 +878,38 @@ const ResourceSpec = new EntrySpec('resources', 'resource', {
   addDate: dateToTimestamp,
   lastModifyDate: dateToTimestamp,
   publishDate: (value: string|Date): string => (value instanceof Date ? 'ts:' + dateToTimestamp(value) : value)
+}, {
+  title: PropValidators.String,
+  titleSort: PropValidators.String,
+  rating: PropValidators.OneOf(PropValidators.Empty,
+      PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
+  addDate: PropValidators.Date,
+  lastModifyDate: PropValidators.Date,
+  publishDate: PropValidators.OneOf(PropValidators.Date, PropValidators.String, PropValidators.Empty),
+  publisher: PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+  desc: PropValidators.OneOf(PropValidators.String, PropValidators.Empty)
+}, {
+  title: PropValidators.String,
+  titleSort: PropValidators.String,
+  rating: PropValidators.OneOf(PropValidators.Empty,
+      PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
+  addDate: PropValidators.Number,
+  lastModifyDate: PropValidators.Number,
+  publishDate: PropValidators.OneOf(PropValidators.String, PropValidators.Number, PropValidators.Empty),
+  publisher: PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+  desc: PropValidators.OneOf(PropValidators.String, PropValidators.Empty)
 });
 
 const PersonSpec = new EntrySpec('persons', 'person', {
   name: 'name',
   nameSort: 'name_sort'
-}, {}, {});
+}, {}, {}, {
+  name: PropValidators.String,
+  nameSort: PropValidators.String
+}, {
+  name: PropValidators.String,
+  nameSort: PropValidators.String
+});
 
 /**
  * This function only exists because of TypeScript bug preventing from using object spread operator in form

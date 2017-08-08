@@ -25,6 +25,7 @@ export class Database {
     this._ensureNotInited();
     this._db = await sqlite.open(this._filename,
         { mode: sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, promise: Promise });
+    await this._tuneConnection();
   }
 
   /**
@@ -34,6 +35,7 @@ export class Database {
   async open(): Promise<void> {
     this._ensureNotInited();
     this._db = await sqlite.open(this._filename, { mode: sqlite3.OPEN_READWRITE, promise: Promise });
+    await this._tuneConnection();
   }
 
   /**
@@ -50,7 +52,11 @@ export class Database {
     }
   }
 
-  protected static _validateId(uuid: string|null): string {
+  protected async _tuneConnection() {
+    await this.db.run('PRAGMA foreign_keys = TRUE');
+  }
+
+  protected static _validateId(uuid: string|null|undefined): string {
     if (uuid == null || uuid.length === 0) {
       throw new Error('Invalid or empty UUID');
     }

@@ -338,11 +338,55 @@ describe("LibraryDatabase", function () {
     });
   });
 
+  describe("Resources", function () {
+    let db: LibraryDatabase;
+
+    beforeEach(function () {
+      db = new LibraryDatabase(':memory:');
+      return db.create();
+    });
+
+    it("should add a resource with default values", async function () {
+      let clock = sinon.useFakeTimers();
+      clock.tick(10000);
+
+      try {
+        let res = await db.addResource({
+          title: 'Some book',
+          titleSort: 'Some book'
+        });
+
+        function testObject(res: Resource) {
+          expect(res.title).to.be.equal('Some book');
+          expect(res.titleSort).to.be.equal('Some book');
+          expect(res.rating == null).to.be.true;
+          expect(res.addDate == null).to.not.be.true;
+          if (res.addDate != null) {
+            expect(dateToTimestamp(res.addDate)).to.be.equal(10);
+          }
+          expect(res.lastModifyDate == null).to.not.be.true;
+          if (res.lastModifyDate != null) {
+            expect(dateToTimestamp(res.lastModifyDate)).to.be.equal(10);
+          }
+          expect(res.publishDate == null).to.be.true;
+          expect(res.publisher == null).to.be.true;
+          expect(res.desc == null).to.be.true;
+        }
+
+        testObject(res);
+
+        let res2 = await db.getResource((res as Resource).uuid as string);
+        testObject(res2 as Resource);
+      } finally {
+        clock.restore();
+      }
+    });
+  });
+
   describe("Relations", function () {
     let db: LibraryDatabase;
 
     beforeEach(async function () {
-      // db = new LibraryDatabase(tmp.fileSync().name);
       db = new LibraryDatabase(':memory:');
       await db.create();
 
@@ -456,6 +500,21 @@ describe("LibraryDatabase", function () {
 
       expect(await db.relatedGroups(MIST)).to.have.lengthOf(3);
     });
+
+    it("should remove a resource with relations", async function () {
+      await db.addGroupRelation(MIST, TAG1);
+      return db.removeResource(MIST).should.be.fulfilled;
+    });
+
+    it("should remove a resource with person relations", async function () {
+      await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+      await db.addPersonRelation(MIST, KING, PersonRelation.Editor);
+
+      await db.removeResource(MIST).should.be.fulfilled;
+
+      await db.getResource(MIST).should.eventually.be.null;
+      return db.getPerson(KING).should.eventually.not.be.null;
+    });
   });
 
   describe("Time handling", function () {
@@ -485,8 +544,8 @@ describe("LibraryDatabase", function () {
         title: 'some title',
         titleSort: 'some title sort',
         rating: 0,
-        addDate: date,
-        lastModifyDate: date,
+        addDate: datePast,
+        lastModifyDate: datePast,
         publishDate: '',
         publisher: '',
         desc: ''
@@ -591,6 +650,39 @@ describe("LibraryDatabase", function () {
       let res = await db.getResource(TEST_UUID) as Resource;
       expect(res.uuid).to.be.equal(TEST_UUID);
       expect(res.publishDate as string).to.be.equal('5th century');
+    });
+  });
+
+  describe("Type checking", function () {
+    let db: LibraryDatabase;
+
+    beforeEach(function () {
+      db = new LibraryDatabase(':memory:');
+      return db.create();
+    });
+
+    it("should not allow setting invalid rating", async function () {
+      await db.addResource({
+        uuid: TEST_UUID,
+        title: 'some title',
+        titleSort: 'some title sort',
+        rating: 530,
+        publishDate: '',
+        publisher: '',
+        desc: ''
+      }).should.be.rejected;
+
+      await db.addResource({
+        title: 'some title',
+        titleSort: 'some title',
+        rating: -10
+      }).should.be.rejected;
+
+      await db.addResource({
+        title: 'some title',
+        titleSort: 'some title',
+        rating: 300
+      }).should.be.fulfilled;
     });
   });
 });
