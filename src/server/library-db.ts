@@ -13,12 +13,12 @@ export interface Resource {
   /**
    * Title of a resource that is displayed to user.
    */
-  title: string;
+  title?: string;
 
   /**
    * Much like a title, but is used to sort resources in alphabetic order.
    */
-  titleSort: string;
+  titleSort?: string;
 
   /**
    * Rating of a resource. A library user is not the only man who can rate books. And honestly, Organelle has no need
@@ -63,6 +63,15 @@ export interface Resource {
   desc?: string;
 }
 
+export interface NewResource extends Resource {
+  title: string;
+  titleSort: string;
+}
+
+export interface UpdateResource extends Resource {
+  uuid: string;
+}
+
 /**
  * Any person that should be mentioned in library (author, translator or editor) is represented by such objects.
  */
@@ -72,12 +81,21 @@ export interface Person {
   /**
    * Name of a person.
    */
-  name: string;
+  name?: string;
 
   /**
    * Used instead of a name when sorting persons in alphabetical order.
    */
+  nameSort?: string;
+}
+
+export interface NewPerson extends Person {
+  name: string;
   nameSort: string;
+}
+
+export interface UpdatePerson extends Person {
+  uuid: string;
 }
 
 export enum PersonRelation {
@@ -107,17 +125,27 @@ export interface Group {
   /**
    * Group title
    */
-  title: string;
+  title?: string;
 
   /**
    * Used instead of title when sorting groups in alphabetic order.
    */
-  titleSort: string;
+  titleSort?: string;
 
   /**
    * Type of this group.
    */
+  groupType?: GroupType;
+}
+
+export interface NewGroup extends Group {
+  title: string;
+  titleSort: string;
   groupType: GroupType;
+}
+
+export interface UpdateGroup extends Group {
+  uuid: string;
 }
 
 /**
@@ -140,21 +168,43 @@ export interface GroupType {
   /**
    * Type name
    */
-  name: string;
+  name?: string;
 
   /**
    * If group is exclusive, a resource can be linked to only one group of this type. An example of an exclusive group type
    * is category type: a book cannot belong to two categories at same time. Tags are not exclusive and you can add
    * as much tags as you with to a single book.
    */
-  exclusive: boolean;
+  exclusive?: boolean;
 
   /**
    * If group is ordered, resources in the groups are ordered and you can specify an index of a resource has in
    * a group. An example of an ordered group is series type: each book in series has its number. But indexes are
    * optional, any resource can relate to an ordered group while omitting an index.
    */
+  ordered?: boolean;
+}
+
+export interface NewGroupType extends GroupType {
+  name: string;
+  exclusive: boolean;
   ordered: boolean;
+}
+
+export interface UpdateGroupType extends GroupType {
+  uuid: string;
+}
+
+export enum ObjectRole {
+  Format = 1
+}
+
+export interface RelatedObject {
+  rowId?: number;
+  resourceUuid?: string;
+  uuid?: string|null;
+  role?: ObjectRole;
+  tag?: string;
 }
 
 /**
@@ -217,6 +267,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
               UNIQUE(res_id, group_id, group_index),
               FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT,
               FOREIGN KEY(group_id) REFERENCES groups(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
+        `CREATE TABLE objects(id INTEGER PRIMARY KEY, res_id TEXT NOT NULL, uuid TEXT NOT NULL,
+              role INTEGER NOT NULL, tag TEXT,
+              UNIQUE(res_id, uuid, role, tag),
+              FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
     ];
 
     for (let query of SCHEMA) {
@@ -248,11 +302,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {GroupType|null} GroupType object for the type or null if type has not been found.
    */
   getGroupType(uuid: string): GroupType|null {
-    if (uuid == null || uuid.length === 0) {
-      throw new Error('Cannot find group type: invalid UUID');
-    }
-
-    uuid = uuid.toLowerCase().trim();
+    uuid = Database._validateId(uuid);
     let found = this._groupTypes.find(x => x.uuid === uuid);
     return found == null ? null : { ...found };
   }
@@ -263,20 +313,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {GroupType} gtData GroupType object containing properties of the new group type.
    * @returns {Promise<GroupType>} GroupType object that has been added.
    */
-  async addGroupType(gtData: GroupType): Promise<GroupType> {
-    let typeUuid = gtData.uuid;
-    if (typeUuid == null || typeUuid.length === 0) {
-      typeUuid = uuid.v4();
-    } else if (this.getGroupType(typeUuid) != null) {
-      throw new Error(`Cannot add a group type with given UUID ${gtData.uuid}: type already exists`);
-    }
-
-    await this.db.run("INSERT INTO group_types(uuid, name, exclusive, ordered) VALUES(?, ?, ?, ?)", [
-        typeUuid.toLowerCase(), gtData.name, gtData.exclusive, gtData.ordered
-    ]);
-
-    this._groupTypes.push({ ...gtData, uuid: typeUuid });
-    return { ...gtData, uuid: typeUuid };
+  async addGroupType(gtData: NewGroupType): Promise<GroupType> {
+    let createdType = await this._addEntry(gtData, GroupTypeSpec);
+    this._groupTypes.push({ ...createdType });
+    return createdType;
   }
 
   /**
@@ -285,17 +325,14 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<void>}
    */
   async removeGroupType(uuid: string) : Promise<void> {
-    if (uuid == null || uuid.length === 0) {
-      throw new Error('Cannot remove group type: invalid UUID');
-    }
-    uuid = uuid.toLowerCase().trim();
+    uuid = Database._validateId(uuid);
 
-    let typeIndex = this._groupTypes.findIndex(x => x.uuid === uuid.toLowerCase());
+    let typeIndex = this._groupTypes.findIndex(x => x.uuid === uuid);
     if (typeIndex < 0) {
       throw new Error('Cannot remove group type: type does not exist');
     }
 
-    await this.db.run("DELETE FROM group_types WHERE uuid = ?", [ uuid.toLowerCase() ]);
+    await this._removeEntry(uuid, GroupTypeSpec);
 
     this._groupTypes.splice(typeIndex, 1);
   }
@@ -304,10 +341,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * Change an existing group type.
    * @param {GroupType} gt GroupType object with new properties for this type. This object must have UUID specified,
    * otherwise the function will fail.
-   * @returns {Promise<GroupType>} Updated GroupType object. Note that this is a new object, not one you've passed
-   * as an argument.
    */
-  async updateGroupType(gt: GroupType): Promise<GroupType> {
+  async updateGroupType(gt: UpdateGroupType): Promise<void> {
     let uuid = Database._validateId(gt.uuid);
 
     let typeIndex = this._groupTypes.findIndex(x => x.uuid === uuid);
@@ -315,12 +350,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
       throw new Error('Cannot update group type: type does not exist');
     }
 
-    await this.db.run("UPDATE group_types SET name = ?, exclusive = ?, ordered = ? WHERE uuid = ?", [
-        gt.name, gt.exclusive, gt.ordered, gt.uuid
-    ]);
+    await this._updateEntry(gt, GroupTypeSpec);
 
     this._groupTypes[typeIndex] = { ...gt, uuid: uuid };
-    return { ...gt, uuid: uuid };
   }
 
   /**
@@ -338,7 +370,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {Resource} res Resource object containing properties of the new resource.
    * @returns {Promise<Resource>} Resource object that has been added.
    */
-  addResource(res: Resource): Promise<Resource> {
+  addResource(res: NewResource): Promise<Resource> {
     let curDate = new Date();
     return this._addEntry({ ...res, addDate: curDate, lastModifyDate: curDate }, ResourceSpec);
   }
@@ -347,13 +379,13 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * Change an existing resource.
    * @param {Resource} res Resource object with new properties for this resource. This object must have UUID specified,
    * otherwise the function will fail.
-   * @returns {Promise<Resource>} Updated Resource object. Note that this is a new object, not one you've passed
-   * as an argument.
    */
-  updateResource(res: Resource): Promise<Resource> {
-    let curDate = new Date();
-    return this._updateEntry({ ...res, lastModifyDate: curDate, addDate: undefined }, ResourceSpec,
-        [ 'addDate' ]);
+  updateResource(res: UpdateResource): Promise<void> {
+    let updData = { ...res };
+    updData.lastModifyDate = new Date();
+    delete updData.addDate;
+
+    return this._updateEntry(updData, ResourceSpec);
   }
 
   /**
@@ -380,7 +412,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {Resource} pers Person object containing properties of the new person.
    * @returns {Promise<Resource>} Person object that has been added.
    */
-  addPerson(pers: Person): Promise<Person> {
+  addPerson(pers: NewPerson): Promise<Person> {
     return this._addEntry(pers, PersonSpec);
   }
 
@@ -388,10 +420,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * Change an existing person.
    * @param {Resource} pers Person object with new properties for this person. This object must have UUID specified,
    * otherwise the function will fail.
-   * @returns {Promise<Person>} Updated Person object. Note that this is a new object, not one you've passed
-   * as an argument.
    */
-  updatePerson(pers: Person): Promise<Person> {
+  updatePerson(pers: UpdatePerson): Promise<void> {
     return this._updateEntry(pers, PersonSpec);
   }
 
@@ -419,7 +449,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {Resource} group Group object containing properties of the new group.
    * @returns {Promise<Group>} Group object that has been added.
    */
-  addGroup(group: Group): Promise<Group> {
+  addGroup(group: NewGroup): Promise<Group> {
     return this._addEntry(group, this._groupSpec);
   }
 
@@ -427,10 +457,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * Change an existing group.
    * @param {Resource} group Group object with new properties for this group. This object must have UUID specified,
    * otherwise the function will fail.
-   * @returns {Promise<Group>} Updated Group object. Note that this is a new object, not one you've passed
-   * as an argument.
    */
-  updateGroup(group: Group): Promise<Group> {
+  updateGroup(group: UpdateGroup): Promise<void> {
     return this._updateEntry(group, this._groupSpec);
   }
 
@@ -455,7 +483,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     person = Database._validateId(person);
 
     await this.db.run("INSERT INTO res_to_persons(res_id, person_id, relation) VALUES(?, ?, ?)",
-        [ resource, person, relation ]);
+        [ resource, person, PersonRelationSpec.prop('relation').toDb(relation) ]);
   }
 
   /**
@@ -469,19 +497,19 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<void>}
    */
   async removePersonRelations(resource: string, person?: string, relation?: PersonRelation): Promise<void> {
-    let whereList: string[] = ['res_id'], bound: any[] = [ Database._validateId(resource) ];
+    let whereClause = new WhereClauseBuilder();
+
+    whereClause.add('res_id', Database._validateId(resource));
+
     if (person != null) {
-      whereList.push('person_id');
-      bound.push(Database._validateId(person));
+      whereClause.add('person_id', Database._validateId(person));
     }
+
     if (relation != null) {
-      whereList.push('relation');
-      bound.push(relation);
+      whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
     }
 
-    let whereClause = whereList.map(x => x + ' = ?').join(' AND ');
-
-    await this.db.run(`DELETE FROM res_to_persons WHERE ${whereClause}`, bound);
+    await this.db.run(`DELETE FROM res_to_persons WHERE ${whereClause.clause}`, whereClause.bound);
   }
 
   /**
@@ -492,20 +520,16 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<RelatedPerson[]>} List of relations between persons and this resource.
    */
   async relatedPersons(resource: string, relation?: PersonRelation): Promise<RelatedPerson[]> {
-    resource = Database._validateId(resource);
+    let whereClause = new WhereClauseBuilder();
 
-    let whereClause: string, bound: any[];
-    if (relation == null) {
-      whereClause = 'res_id = ?';
-      bound = [resource];
-    } else {
-      whereClause = 'res_id = ? AND relation = ?';
-      bound = [resource, relation];
+    whereClause.add('res_id', Database._validateId(resource));
+    if (relation != null) {
+      whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
     }
 
     let rows: { relation: number, uuid: string, name: string, name_sort: string }[] = await this.db.all(
-        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid WHERE ${whereClause}`,
-        bound);
+        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid WHERE ${whereClause.clause}`,
+        whereClause.bound);
 
     let results: RelatedPerson[] = [];
     for (let row of rows) {
@@ -535,6 +559,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       throw new Error(`Cannot add relation to group with UUID = ${groupUuid}: no such group exists`);
     }
 
+    if (group.groupType == null) {
+      throw new Error('Invalid group type');
+    }
+
     if (groupIndex != null && !group.groupType.ordered) {
       throw new Error(`Cannot add relation with group index to group (UUID = ${groupUuid}) that is not ordered`);
     }
@@ -549,7 +577,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
 
     await this.db.run("INSERT INTO res_to_groups(res_id, group_id, group_index) VALUES(?, ?, ?)",
-        [ resource, groupUuid, groupIndex == null ? -1 : groupIndex ]);
+        [ resource, groupUuid, GroupRelationSpec.prop('groupIndex').toDb(groupIndex) ]);
 
     let relGroup: RelatedGroup = group as RelatedGroup;
     relGroup.groupIndex = groupIndex == null ? null : groupIndex;
@@ -567,19 +595,17 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<void>}
    */
   async removeGroupRelations(resource: string, group?: string, groupType?: GroupType): Promise<void> {
-    let whereList: string[] = ['res_id = ?'], bound: any[] = [Database._validateId(resource)];
+    let whereClause = new WhereClauseBuilder();
+
+    whereClause.add('res_id', Database._validateId(resource));
     if (group != null) {
-      whereList.push('group_id = ?');
-      bound.push(Database._validateId(group));
+      whereClause.add('group_id', Database._validateId(group));
     }
     if (groupType != null) {
-      whereList.push('group_id IN (SELECT uuid FROM groups WHERE type = ?)');
-      bound.push(groupType.uuid);
+      whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
 
-    let whereClause = whereList.join(' AND ');
-
-    await this.db.run(`DELETE FROM res_to_groups WHERE ${whereClause}`, bound);
+    await this.db.run(`DELETE FROM res_to_groups WHERE ${whereClause.clause}`, whereClause.bound);
   }
 
   /**
@@ -590,20 +616,18 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<RelatedGroup[]>}
    */
   async relatedGroups(resource: string, groupType?: GroupType): Promise<RelatedGroup[]> {
-    let whereList: string[] = ['res_id = ?'],
-        bound: any[] = [Database._validateId(resource)];
+    let whereClause = new WhereClauseBuilder();
+
+    whereClause.add('res_id', Database._validateId(resource));
 
     if (groupType != null) {
-      whereList.push('group_id IN (SELECT uuid FROM groups WHERE type = ?)');
-      bound.push(groupType.uuid);
+      whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
-
-    let whereClause = whereList.join(' AND ');
 
     let rows: { group_id: string, group_index: number, type: string, title: string, title_sort: string }[] =
         await this.db.all(`SELECT group_index, uuid, type, title, title_sort FROM res_to_groups ` +
-        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid WHERE ${whereClause}`,
-        bound);
+        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid WHERE ${whereClause.clause}`,
+        whereClause.bound);
 
     let results: RelatedGroup[] = [];
     for (let row of rows) {
@@ -615,36 +639,85 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return results;
   }
 
+  async relatedObjects(resource: string, role?: ObjectRole, tag?: string): Promise<RelatedObject[]> {
+    let whereClause = new WhereClauseBuilder();
+
+    whereClause.add('res_id', Database._validateId(resource));
+    if (role != null) {
+      whereClause.add('role', ObjectSpec.prop('role').toDb(role));
+    }
+    if (tag != null) {
+      whereClause.add('tag', ObjectSpec.prop('tag').toDb(tag));
+    }
+
+    let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag FROM objects WHERE ${whereClause.clause}`,
+        whereClause.bound);
+
+    return rows.map(row => ObjectSpec.rowToEntry<RelatedObject>(row));
+  }
+
+  async addObjectRelation(resource: string, obj: RelatedObject): Promise<RelatedObject> {
+    resource = Database._validateId(resource);
+    let objectUuid = Database._validateId(obj.uuid);
+
+    let result = await this.db.run(`INSERT INTO objects(uuid, res_id, role, tag) VALUES(?, ?, ?, ?)`,
+        [ objectUuid, resource, ObjectSpec.prop('role').toDb(obj.role),
+          ObjectSpec.prop('tag').toDb(obj.tag) ]);
+
+    return { ...obj, rowId: result.lastID, resourceUuid: resource };
+  }
+
+  async updateObjectRelation(obj: RelatedObject): Promise<void> {
+    if (obj.rowId == null) {
+      throw new Error('Cannot update an object relation: rowId is invalid');
+    }
+
+    let setList: string[] = [], bound: any[] = [];
+    for (let propName of Object.keys(obj)) {
+      if (ObjectSpec.columnSupported(propName)) {
+        setList.push(ObjectSpec.prop(propName).column + ' = ?');
+        bound.push(ObjectSpec.prop(propName).toDb((obj as any)[propName]))
+      }
+    }
+
+    bound.push(obj.rowId);
+
+    let setClause = setList.join(', ');
+
+    let result = await this.db.run(`UPDATE objects SET ${setClause} WHERE id = ?`, bound);
+    if (result.changes === 0) {
+      throw new Error('Cannot update object relation: no record with given rowId exists');
+    }
+  }
+
+  async removeObjectRelation(obj: RelatedObject): Promise<void> {
+    if (obj.rowId == null) {
+      throw new Error('Cannot remove object relation: rowId is invalid');
+    }
+
+    let result = await this.db.run(`DELETE FROM objects WHERE id = ?`, [ obj.rowId ]);
+    if (result.changes === 0) {
+      throw new Error('Cannot remove object relation: no record with given rowId exists');
+    }
+  }
+
   /** Protected area **/
 
   protected _groupTypes: GroupType[] = [];
 
-  protected _groupSpec = new EntrySpec('groups', 'group', {
-    title: 'title',
-    titleSort: 'title_sort',
-    groupType: 'type'
-  }, {
-    groupType: (groupType: string) => this.getGroupType(groupType)
-  }, {
-    groupType: (groupType: GroupType) => groupType.uuid
-  }, {
-    title: PropValidators.String,
-    titleSort: PropValidators.String,
-    groupType: (value: any): boolean => {
-      return value != null && value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0
-    }
-  }, {
-    title: PropValidators.String,
-    titleSort: PropValidators.String,
-    groupType: (value: any): boolean => typeof value === 'string' && value.length > 0
-  });
+  protected _groupSpec = new EntrySpec('groups', 'group', [
+      new UuidFieldSpec(),
+      new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
+      new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
+      new GroupTypeFieldSpec('groupType', 'type', this)
+  ]);
 
   protected async _loadGroupTypes(): Promise<void> {
     let types = await this.db.all<{ uuid: string, name: string, exclusive: number, ordered: number}>
                   ("SELECT uuid, name, exclusive, ordered FROM group_types");
     this._groupTypes = types.map(item => {
       return {
-        uuid: item.uuid.toLowerCase(),
+        uuid: item.uuid.toLowerCase().trim(),
         name: item.name,
         exclusive: !!item.exclusive,
         ordered: !!item.ordered
@@ -653,10 +726,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   protected async _getEntry<T>(uuid: string, spec: EntrySpec): Promise<T|null> {
-    if (uuid == null || uuid.length === 0) {
-      throw new Error(`Cannot find ${spec.human}: invalid UUID`);
-    }
-    uuid = uuid.toLowerCase().trim();
+    uuid = Database._validateId(uuid);
 
     let row: { [prop: string]: any }|null = await this.db.get(`SELECT * FROM ${spec.table} WHERE uuid = ?`, [ uuid ]);
     if (row == null) {
@@ -669,24 +739,23 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   protected async _updateEntry<T extends { uuid?: string|null } & { [name: string]: any }>
-                  (entry: T, spec: EntrySpec, propsToIgnore?: string[]): Promise<T> {
-    if (entry.uuid == null || entry.uuid.length === 0) {
-      throw new Error(`Cannot update ${spec.human}: invalid UUID`);
+                  (entry: T, spec: EntrySpec): Promise<void> {
+    let entryUuid = Database._validateId(entry.uuid);
+
+    let setList: string[] = [], bound: any[] = [];
+
+    for (let propName of Object.keys(entry)) {
+      if (spec.propSupported(propName)) {
+        let fieldSpec = spec.prop(propName);
+
+        setList.push(fieldSpec.column + ' = ?');
+        bound.push(fieldSpec.toDb(entry[propName]));
+      }
     }
-    let entryUuid = entry.uuid.toLowerCase().trim();
 
-    let mappings = spec.getMappings();
-    if (mappings.length === 0) {
-      throw new Error(`Invalid entry spec for ${spec.human}`);
-    }
+    let setClause = setList.join(', ');
 
-    if (propsToIgnore != null) {
-      mappings = mappings.filter(item => propsToIgnore.indexOf(item.prop) < 0);
-    }
-
-    let setClause = mappings.map(item => item.column + ' = ?').join(', ');
-
-    let bound = mappings.map(item => spec.valueToDb(entry[item.prop], item.prop));
+    // bind value for WHERE clause
     bound.push(entryUuid);
 
     let stmt = await this.db.run(`UPDATE ${spec.table} SET ${setClause} WHERE uuid = ?`, bound);
@@ -694,8 +763,6 @@ export class LibraryDatabase extends DatabaseWithOptions {
     if (stmt.changes === 0) {
       throw new Error(`Cannot update ${spec.human}: no entry with given UUID have been found`);
     }
-
-    return workaroundSpread(entry, entryUuid);
   }
 
   protected async _addEntry<T extends { uuid?: string|null } & { [name: string]: any }>(entry: T, spec: EntrySpec): Promise<T> {
@@ -706,16 +773,13 @@ export class LibraryDatabase extends DatabaseWithOptions {
       entryUuid = entry.uuid.toLowerCase().trim();
     }
 
-    let mappings = spec.getMappings();
-    if (mappings.length === 0) {
-      throw new Error(`Invalid entry spec for ${spec.human}`);
-    }
+    let mappings = spec.fieldSpecs;
 
-    let intoClause = 'uuid, ' + mappings.map(item => item.column).join(', ');
-    let valuesClause = (new Array(mappings.length + 1)).fill('?').join(', ');
-
-    let bound = mappings.map(item => spec.valueToDb(entry[item.prop], item.prop));
-    bound.unshift(entryUuid);
+    let intoClause = mappings.map(item => item.column).join(', ');
+    let valuesClause = (new Array(mappings.length)).fill('?').join(', ');
+    let bound = mappings.map(spec => {
+      return spec.prop === 'uuid' ? entryUuid : spec.toDb(entry[spec.prop])
+    });
 
     await this.db.run(`INSERT INTO ${spec.table}(${intoClause}) VALUES(${valuesClause})`, bound);
 
@@ -723,99 +787,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   protected async _removeEntry<T>(uuid: string, spec: EntrySpec): Promise<void> {
-    if (uuid == null || uuid.length === 0) {
-      throw new Error(`Cannot remove ${spec.human}: invalid UUID`);
-    }
-    uuid = uuid.toLowerCase().trim();
-
+    uuid = Database._validateId(uuid);
     await this.db.run(`DELETE FROM ${spec.table} WHERE uuid = ?`, [ uuid ]);
-  }
-}
-
-class EntrySpec {
-  constructor(public table: string, public human: string,
-              protected _mappings: { [name: string]: string },
-              protected _fromDbHandlers: { [name: string]: (value: any) => any },
-              protected _toDbHandlers: { [name: string]: (value: any) => any},
-              protected _toDbValidators: { [name: string]: PropValidator },
-              protected _fromDbValidators: { [name: string]: PropValidator }
-              ) { }
-
-  propToColumnName(prop: string): string {
-    if (prop === 'uuid') {
-      return 'uuid';
-    }
-    if (this._mappings[prop] == null) {
-      throw new Error(`Cannot map property ${prop} to any database column name`);
-    } else {
-      return this._mappings[prop];
-    }
-  }
-
-  columnToPropName(column: string): string {
-    if (column === 'uuid') {
-      return 'uuid';
-    }
-    let found = Object.keys(this._mappings).find(prop => this._mappings[prop] === column);
-    if (found == null) {
-      throw new Error(`Cannot map database column name ${column} to any property`);
-    } else {
-      return found;
-    }
-  }
-
-  columnSupported(column: string): boolean {
-    return column === 'uuid' || Object.keys(this._mappings).some(prop => this._mappings[prop] === column);
-  }
-
-  valueFromDb(value: any, columnName: string): any {
-    let propName = this.columnToPropName(columnName);
-    if (!this.validateFromDb(value, propName)) {
-      throw new Error(`Database value is invalid: ${value}`);
-    }
-    return this._fromDbHandlers[propName] == null ? value : this._fromDbHandlers[propName](value);
-  }
-
-  valueToDb(value: any, propName: string): any {
-    if (!this.validateToDb(value, propName)) {
-      throw new Error(`Value for property ${propName} is invalid: ${value}`);
-    }
-    return this._toDbHandlers[propName] == null ? value : this._toDbHandlers[propName](value);
-  }
-
-  rowToEntry<T>(row: { [name: string]: any }): T {
-    let result: { [name: string]: any } = {};
-    Object.keys(row).forEach(columnName => {
-      if (this.columnSupported(columnName)) {
-        result[this.columnToPropName(columnName)] = this.valueFromDb(row[columnName], columnName);
-      }
-    });
-    return result as T;
-  }
-
-  getMappings(): { prop: string, column: string }[] {
-    return Object.keys(this._mappings).map(propName => {
-      return {
-        prop: propName,
-        column: this.propToColumnName(propName)
-      }
-    });
-  }
-
-  validateToDb(value: any, propName: string): boolean {
-    if (this._toDbValidators[propName] == null) {
-      return true;
-    } else {
-      return this._toDbValidators[propName](value);
-    }
-  }
-
-  validateFromDb(value: any, propName: string): boolean {
-    if (this._fromDbValidators[propName] == null) {
-      return true;
-    } else {
-      return this._fromDbValidators[propName](value);
-    }
   }
 }
 
@@ -851,65 +824,224 @@ namespace PropValidators {
   }
 }
 
-const ResourceSpec = new EntrySpec('resources', 'resource', {
-  title: 'title',
-  titleSort: 'title_sort',
-  rating: 'rating',
-  addDate: 'add_date',
-  lastModifyDate: 'last_modify_date',
-  publishDate: 'publish_date',
-  publisher: 'publisher',
-  desc: 'desc'
-}, { // from database
-  addDate: timestampToDate,
-  lastModifyDate: timestampToDate,
-  publishDate: (value: string): string|Date|null => {
-    if (value == null) {
-      return null;
+class EntrySpec {
+  constructor(protected _table: string, protected _human: string, protected _fieldSpecs: FieldSpec[],
+              protected _id: string = 'uuid') { }
+
+  get fieldSpecs(): FieldSpec[] { return this._fieldSpecs; }
+  get table(): string { return this._table; }
+  get human(): string { return this._human; }
+  get id(): string { return this._id; }
+
+  prop(propName: string): FieldSpec {
+    let found = this._fieldSpecs.find(spec => spec.prop === propName);
+    if (found == null) {
+      throw new Error(`Cannot find field spec for an object property named ${propName} for table ${this.table}`);
     }
-    if (value.startsWith('ts:')) {
-      let ts = parseInt(value.slice(3), 10);
-      return isNaN(ts) ? value : timestampToDate(ts);
-    } else {
-      return value;
+    return found;
+  }
+
+  column(column: string): FieldSpec {
+    let found = this._fieldSpecs.find(spec => spec.column === column);
+    if (found == null) {
+      throw new Error(`Cannot find field spec for a database column named ${column} for table ${this.table}`);
+    }
+    return found;
+  }
+
+  propSupported(prop: string): boolean {
+    return this._fieldSpecs.some(spec => spec.prop === prop);
+  }
+
+  columnSupported(column: string): boolean {
+    return this._fieldSpecs.some(spec => spec.column === column);
+  }
+
+  rowToEntry<T>(row: { [name: string]: any }): T {
+    let result: { [name: string]: any } = {};
+
+    Object.keys(row).forEach(column => {
+      if (this.columnSupported(column)) {
+        let spec = this.column(column);
+        result[spec.prop] = spec.fromDb(row[column]);
+      }
+    });
+
+    return result as T;
+  }
+}
+
+interface FieldSpec {
+  prop: string;
+  column: string;
+
+  toDb(value: any): any;
+  fromDb(value: any): any;
+
+  validateToDb(value: any): void;
+  validateFromDb(value: any): void;
+}
+
+class GenericFieldSpec implements FieldSpec {
+  constructor(protected _prop: string, protected _column: string, protected _toDbValidator?: PropValidator,
+              protected _fromDbValidator?: PropValidator) { }
+
+  get prop(): string { return this._prop; }
+  get column(): string { return this._column; }
+
+  toDb(value: any): any {
+    this.validateToDb(value);
+    return value;
+  }
+
+  fromDb(value: any): any {
+    this.validateFromDb(value);
+    return value;
+  }
+
+  validateToDb(value: any): void {
+    if (this._toDbValidator) {
+      if (!this._toDbValidator(value)) {
+        throw new Error(`Invalid value for a property value "${this.prop}"`)
+      }
     }
   }
-}, { // to database
-  addDate: dateToTimestamp,
-  lastModifyDate: dateToTimestamp,
-  publishDate: (value: string|Date): string => (value instanceof Date ? 'ts:' + dateToTimestamp(value) : value)
-}, {
-  title: PropValidators.String,
-  titleSort: PropValidators.String,
-  rating: PropValidators.OneOf(PropValidators.Empty,
-      PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
-  addDate: PropValidators.Date,
-  lastModifyDate: PropValidators.Date,
-  publishDate: PropValidators.OneOf(PropValidators.Date, PropValidators.String, PropValidators.Empty),
-  publisher: PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
-  desc: PropValidators.OneOf(PropValidators.String, PropValidators.Empty)
-}, {
-  title: PropValidators.String,
-  titleSort: PropValidators.String,
-  rating: PropValidators.OneOf(PropValidators.Empty,
-      PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
-  addDate: PropValidators.Number,
-  lastModifyDate: PropValidators.Number,
-  publishDate: PropValidators.OneOf(PropValidators.String, PropValidators.Number, PropValidators.Empty),
-  publisher: PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
-  desc: PropValidators.OneOf(PropValidators.String, PropValidators.Empty)
-});
 
-const PersonSpec = new EntrySpec('persons', 'person', {
-  name: 'name',
-  nameSort: 'name_sort'
-}, {}, {}, {
-  name: PropValidators.String,
-  nameSort: PropValidators.String
-}, {
-  name: PropValidators.String,
-  nameSort: PropValidators.String
-});
+  validateFromDb(value: any): void {
+    if (this._fromDbValidator) {
+      if (!this._fromDbValidator(value)) {
+        throw new Error(`Invalid value for a database column "${this.column}"`);
+      }
+    }
+  }
+}
+
+class UuidFieldSpec extends GenericFieldSpec {
+  constructor(prop: string = 'uuid', column: string = 'uuid') {
+    super(prop, column, PropValidators.OneOf(PropValidators.String, PropValidators.Empty), PropValidators.String);
+  }
+}
+
+class DateFieldSpec extends GenericFieldSpec {
+  constructor(prop: string, column: string) {
+    super(prop, column, PropValidators.Date, PropValidators.Number)
+  }
+
+  toDb(value: any): any {
+    this.validateToDb(value);
+    return dateToTimestamp(value as Date);
+  }
+
+  fromDb(value: any): any {
+    this.validateFromDb(value);
+    return timestampToDate(value as number);
+  }
+}
+
+class PublishDateSpec extends GenericFieldSpec {
+  constructor(prop: string, column: string) {
+    super(prop, column,
+        PropValidators.OneOf(PropValidators.Date, PropValidators.String, PropValidators.Empty),
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty));
+  }
+
+  toDb(value: any): any {
+    return value instanceof Date ? 'ts:' + dateToTimestamp(value) : value;
+  }
+
+  fromDb(value: any): any {
+    if (typeof value === 'string') {
+      if (value.startsWith('ts:')) {
+        let ts = parseInt(value.slice(3), 10);
+        return isNaN(ts) ? value : timestampToDate(ts);
+      } else {
+        return value;
+      }
+    } else {
+      return null;
+    }
+  }
+}
+
+class GroupTypeFieldSpec extends GenericFieldSpec {
+  constructor(prop: string, column: string, protected _db: LibraryDatabase) {
+    super(prop, column,
+        (value: any): boolean => (value != null && value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0),
+        (value: any): boolean => (typeof value === 'string' && value.length > 0));
+  }
+
+  toDb(value: any): any {
+    return value.uuid;
+  }
+
+  fromDb(value: any): any {
+    return this._db.getGroupType(value);
+  }
+}
+
+class GroupIndexFieldSpec extends GenericFieldSpec {
+  constructor(prop: string, column: string) {
+    super(prop, column, PropValidators.OneOf(PropValidators.Number, PropValidators.Empty), PropValidators.Number);
+  }
+
+  toDb(value: any): any {
+    return value == null ? -1 : value;
+  }
+
+  fromDb(value: any): any {
+    return value < 0 ? null : value;
+  }
+}
+
+const ResourceSpec = new EntrySpec('resources', 'resource', [
+    new UuidFieldSpec(),
+    new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('rating', 'rating',
+        PropValidators.OneOf(PropValidators.Empty,
+              PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
+        PropValidators.OneOf(PropValidators.Empty,
+            PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0))),
+    new DateFieldSpec('addDate', 'add_date'),
+    new DateFieldSpec('lastModifyDate', 'last_modify_date'),
+    new PublishDateSpec('publishDate', 'publish_date'),
+    new GenericFieldSpec('publisher', 'publisher',
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty)),
+  new GenericFieldSpec('desc', 'desc',
+      PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+      PropValidators.OneOf(PropValidators.String, PropValidators.Empty))
+]);
+
+const PersonSpec = new EntrySpec('persons', 'person', [
+    new UuidFieldSpec(),
+    new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('nameSort', 'name_sort', PropValidators.String, PropValidators.String)
+]);
+
+const ObjectSpec = new EntrySpec('objects', 'object', [
+    new GenericFieldSpec('rowId', 'id', PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
+        PropValidators.Number),
+    new UuidFieldSpec('resourceUuid', 'res_id'),
+    new UuidFieldSpec('uuid', 'uuid'),
+    new GenericFieldSpec('role', 'role', PropValidators.Number, PropValidators.Number),
+    new GenericFieldSpec('tag', 'tag', PropValidators.String, PropValidators.String),
+], 'rowId');
+
+const GroupTypeSpec = new EntrySpec('group_types', 'group type', [
+    new UuidFieldSpec(),
+    new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('exclusive', 'exclusive', PropValidators.Boolean, PropValidators.Boolean),
+    new GenericFieldSpec('ordered', 'ordered', PropValidators.Boolean, PropValidators.Boolean)
+]);
+
+const PersonRelationSpec = new EntrySpec('res_to_persons', 'person relation', [
+    new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number)
+]);
+
+const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
+    new GroupIndexFieldSpec('groupIndex', 'group_index')
+]);
 
 /**
  * This function only exists because of TypeScript bug preventing from using object spread operator in form
@@ -924,4 +1056,34 @@ function workaroundSpread(obj: { [name: string]: any }, uuid: string): any {
   });
   result.uuid = uuid;
   return result;
+}
+
+abstract class ClauseBuilder {
+  abstract add(column: string, value: any): void;
+  abstract get clause(): string;
+  abstract get bound(): any[];
+}
+
+class WhereClauseBuilder extends ClauseBuilder {
+  add(column: string, value: any): void {
+    this.addRaw(column + ' = ?', value);
+  }
+
+  addRaw(cond: string, value: any): void {
+    this._whereList.push(cond);
+    this._bound.push(value);
+  }
+
+  get clause(): string {
+    return this._whereList.join(' AND ');
+  }
+
+  get bound(): any[] {
+    return this._bound;
+  }
+
+  /** Protected area **/
+
+  protected _whereList: string[] = [];
+  protected _bound: any[] = [];
 }
