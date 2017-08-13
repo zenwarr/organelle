@@ -961,3 +961,12 @@ export function ast(input: string): AstNode[] {
   let creator = new AstCreator(tokenize(input));
   return creator.create();
 }
+
+export function isValidTemplate(template: string): boolean {
+  try {
+    let nodes = ast(template);
+    return nodes && nodes.length > 0;
+  } catch (err) {
+    return false;
+  }
+}

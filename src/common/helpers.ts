@@ -58,11 +58,6 @@ export function propercase(input: string, options: PropercaseOptions = DEFAULT_P
       return inputWord;
     }
 
-    if (w.indexOf('-') >= 0) {
-      // if the word contains parts separated with dashes, we should capitalize the parts too
-      w = propercase(w, options, '-');
-    }
-
     let lcw = w.toLowerCase();
     let result: string;
 

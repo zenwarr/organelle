@@ -6,7 +6,7 @@ export const CUR_STORAGE_VERSION = 1;
 export enum ConfigOption {
   Uuid = 'uuid',
   Title = 'title',
-  DefaultPathFormat = 'def_path_format'
+  DefaultFileTemplate = 'def_template'
 }
 
 export class StorageDatabase extends DatabaseWithOptions {

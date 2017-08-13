@@ -4,9 +4,11 @@
   "description": "Ebook catalog application",
   "main": "dist/server/index.js",
   "dependencies": {
+    "@types/fs-extra": "^4.0.0",
     "@types/sqlite3": "^3.1.0",
     "@types/tmp": "0.0.33",
     "@types/uuid": "^3.4.0",
+    "fs-extra": "^4.0.1",
     "sqlite": "^2.8.0",
     "sqlite3": "^3.1.9",
     "tmp": "0.0.31",
