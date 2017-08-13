@@ -165,16 +165,23 @@
  * ```
  */
 
+import {strictParseInt} from "../common/helpers";
+
 export type VarResolver = (name: string, specifier: string|null) => string|null;
 export type FuncResolver = (value: string|null, ...args: any[]) => string|null;
 
-function resolveFromObject(obj: any, name: string, specifier: string|null): string|null {
-  let keys = Object.keys(obj);
-  let lcKeys = keys.map(key => key.toLowerCase());
-  let lcKeysIndex = lcKeys.indexOf(name);
+interface FuncResolverData {
+  resolver: FuncResolver;
+  minArgCount: number;
+  doc: string;
+}
+
+function resolveFromObjectCached(obj: any, cachedKeys: string[], cachedLcKeys: string[], name: string,
+                                 specifier: string|null): string|null {
+  let lcKeysIndex = cachedLcKeys.indexOf(name);
 
   if (lcKeysIndex >= 0) {
-    let result = obj[keys[lcKeysIndex]];
+    let result = obj[cachedKeys[lcKeysIndex]];
     if (specifier != null && specifier.length > 0) {
       return result == null ? null : resolveFromObject(result, specifier, null);
     } else {
@@ -185,70 +192,84 @@ function resolveFromObject(obj: any, name: string, specifier: string|null): stri
   }
 }
 
+function resolveFromObject(obj: any, name: string, specifier: string|null): string|null {
+  let keys = Object.keys(obj);
+  return resolveFromObjectCached(obj, keys, keys.map(key => key.toLowerCase()),
+      name, specifier);
+}
+
 export function createPropsResolver(obj: any): VarResolver {
-  return resolveFromObject.bind(null, obj);
+  let keys = Object.keys(obj);
+  return resolveFromObjectCached.bind(null, obj, keys, keys.map(key => key.toLowerCase()));
 }
 
 const LOREM: string[] = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum'.split(' ');
 
 const DEFAULT_FUNCTIONS: { [name: string]: FuncResolver } = {
-  lowercase: input => {
-    return input == null ? null : input.toLowerCase();
+  lowercase: (input, altInput: string) => {
+    return polymArgCheck(input, altInput).toLowerCase();
   },
-  uppercase: input => {
-    return input == null ? null : input.toUpperCase();
+  uppercase: (input, altInput: string) => {
+    return polymArgCheck(input, altInput).toUpperCase();
   },
-  trim: input => {
-    return input == null ? null : input.trim();
+  trim: (input, altInput: string) => {
+    return polymArgCheck(input, altInput).trim();
   },
-  def: (input: string|null, ...args: any[]): string => {
-    if (args.length < 1) {
-      throw new FilterArgumentsError(1);
+  def: (input: string|null, defValue: string): string => {
+    if (input == null || input == '') {
+      if (defValue == null) {
+        throw new FunctionArgumentsError();
+      }
+      return defValue;
     }
-    return input == null || input.length === 0 ? '' + args[0] : input;
+    return input;
+  },
+  titlecase: (input, altInput: string) => {
+    // let input = polymArgsCheck(input, altInput);
+    // return titlecase(input);
+    throw new Error("Method not implemented");
   },
   add: (input: string|null, ...args: any[]): string => {
-    if (args.length < 2) {
-      throw new FilterArgumentsError(2);
+    let [arg1, arg2] = polymArgsCheck(2, input, ...args);
+    let a = strictParseInt(arg1);
+    if (a == null) {
+      throw new FunctionArgumentsError('First argument is invalid: should be a number');
     }
-
-    let a = parseInt(args[0]), b = parseInt(args[1]);
-    if (isNaN(a)) {
-      throw new Error('Argument 1 is invalid: should be a number');
-    }
-    if (isNaN(b)) {
-      throw new Error('Argument 2 is invalid: should be a number');
+    let b = strictParseInt(arg2);
+    if (b == null) {
+      throw new FunctionArgumentsError('Second argument is invalid: should be a number');
     }
 
     return '' + (a + b);
   },
-  wrap: (input: string|null, ...args: any[]): string => {
-    if (input == null) {
-      throw new Error('The function can be used only as a filter');
+  sub: (input: string|null, ...args: any[]): string => {
+    let [arg1, arg2] = polymArgsCheck(2, input, ...args);
+    let a = strictParseInt(arg1);
+    if (a == null) {
+      throw new FunctionArgumentsError('First argument is invalid: should be a number');
+    }
+    let b = strictParseInt(arg2);
+    if (b == null) {
+      throw new FunctionArgumentsError('Second argument is invalid: should be a number');
     }
 
-    if (args.length < 1) {
-      throw new FilterArgumentsError(1);
-    }
-
-    let format = args[0];
-    if (format == null) {
-      throw new Error('Argument 1 is invalid: a value expected');
-    }
-
-    if (format.indexOf('@') < 0) {
-      throw new Error('You must provide a format string with @ denoting the position of text to wrap');
-    }
-
-    return format.replace('@', input);
+    return '' + (a - b);
   },
-  _lorem: (input: string|null, ...args: any[]): string => {
-    if (args.length < 1) {
-      throw new FilterArgumentsError(1);
+  wrap: (input: string|null, ...args: any[]): string => {
+    let [text, format] = polymArgsCheck(2, input, args);
+    if (format.indexOf('@') < 0) {
+      throw new FunctionArgumentsError('You must provide a format string where @ denotes the position of text to wrap');
     }
-    let wordCount = parseInt(args[0]);
-    if (isNaN(wordCount)) {
-      throw new Error('Argument 1 is invalid: should be a number');
+    return format.replace('@', text);
+  },
+  _lorem: (input: string|null, arg: string): string => {
+    // this function ignores filter input
+    if (arg == null) {
+      throw new FunctionArgumentsError('Invalid number of arguments: one argument expected');
+    }
+    let wordCount = strictParseInt(arg);
+    if (wordCount == null) {
+      throw new FunctionArgumentsError('First argument is invalid: should be a number');
     }
 
     if (wordCount > LOREM.length) {
@@ -259,9 +280,56 @@ const DEFAULT_FUNCTIONS: { [name: string]: FuncResolver } = {
   }
 };
 
-class FilterArgumentsError extends Error {
-  constructor(public reqArgsCount: number) {
-    super();
+class FunctionArgumentsError extends Error {
+  constructor(msg: string = 'Incorrect arguments') {
+    super(msg);
+  }
+}
+
+function polymArg(input: string|null, arg: string|null): string|null {
+  return input == null ? arg : input;
+}
+
+function polymArgCheck(input: string|null, arg: string|null): string {
+  if (input == null) {
+    if (arg == null) {
+      throw new FunctionArgumentsError();
+    }
+    return arg;
+  } else {
+    return input;
+  }
+}
+
+function* polymArgs(count: number, input: string|null, ...args: any[]): IterableIterator<string> {
+  if (input == null) {
+    for (let j = 0; j < count; ++j) {
+      yield '' + args[j];
+    }
+  } else {
+    yield input;
+    for (let j = 0; j < count - 1; ++j) {
+      yield '' + args[j];
+    }
+  }
+}
+
+function* polymArgsCheck(count: number, input: string|null, ...args: any[]): IterableIterator<string> {
+  if (input == null) {
+    for (let j = 0; j < count; ++j) {
+      if (args[j] == null) {
+        throw new FunctionArgumentsError(`Invalid number of arguments: ${count} expected`);
+      }
+      yield '' + args[j];
+    }
+  } else {
+    yield input;
+    for (let j = 0; j < count - 1; ++j) {
+      if (args[j] == null) {
+        throw new FunctionArgumentsError(`Invalid number of arguments: ${count} expected (and first one is filter's input value)`);
+      }
+      yield '' + args[j];
+    }
   }
 }
 
@@ -355,7 +423,11 @@ export class TemplateProcessor {
 
   resolveFunc(name: string, input: string|null, ...args: any[]): string|null {
     let resolver = this.getFuncResolver(name);
-    return resolver == null ? null : resolver(input, ...args);
+    try {
+      return resolver == null ? null : resolver(input, ...args);
+    } catch (err) {
+      throw new Error(`Error while calling function ${name}: ${err.message}`);
+    }
   }
 
   getFuncResolver(name: string): FuncResolver|null {
@@ -404,7 +476,11 @@ export class TemplateProcessor {
         }
       }
 
-      return funcResolver(curValue, ...argList);
+      try {
+        return funcResolver(curValue, ...argList);
+      } catch (err) {
+        throw new Error(`Error while calling function ${node.value}: ${err.message}`);
+      }
     } else if (node.type === AstNodeType.String || node.type === AstNodeType.Number) {
       return node.value;
     } else if (node.type === AstNodeType.FunctionOrVariable) {
@@ -436,6 +512,8 @@ function isValidName(name: string): boolean {
   }
   return true;
 }
+
+/** Tokenizer **/
 
 export enum TokenType {
   RawText,
@@ -665,6 +743,8 @@ export function tokenize(input: string): Token[] {
 
   return tokenList;
 }
+
+/** Ast node creator **/
 
 export enum AstNodeType {
   RawText,

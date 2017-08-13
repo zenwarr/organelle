@@ -3,6 +3,7 @@ import {
   ast, AstNodeType, createPropsResolver, replaceEscapeSequences, TemplateProcessor, tokenize,
   TokenType
 } from "../../server/formatter";
+import {propercase, romanToNumber} from "../../common/helpers";
 
 should();
 
@@ -554,6 +555,48 @@ describe("formatter", function () {
       expect(replaceEscapeSequences('\\\\')).to.be.equal('\\');
       expect(() => replaceEscapeSequences('\\x')).to.throw();
       expect(() => replaceEscapeSequences('\\')).to.throw();
+    });
+  });
+
+  describe("romans", function () {
+    it("should not convert an empty string", function () {
+      expect(romanToNumber('')).to.be.null;
+    });
+
+    it("should work", function () {
+      expect(romanToNumber('I')).to.be.equal(1);
+      expect(romanToNumber('II')).to.be.equal(2);
+      expect(romanToNumber('III')).to.be.equal(3);
+      expect(romanToNumber('IIII')).to.be.equal(4);
+      expect(romanToNumber('IV')).to.be.equal(4);
+      expect(romanToNumber('VI')).to.be.equal(6);
+      expect(romanToNumber('XCIV')).to.be.equal(94);
+      expect(romanToNumber('MCMXCIX')).to.be.equal(1999);
+      expect(romanToNumber('MIM')).to.be.equal(1999);
+      expect(romanToNumber('MCML')).to.be.equal(1950);
+      expect(romanToNumber('MLM')).to.be.equal(1950);
+    });
+
+    it("should not accept invalid numerals", function () {
+      expect(romanToNumber('IIIII')).to.be.null;
+      expect(romanToNumber('CDM')).to.be.null;
+    });
+  });
+
+  describe("proper case", function () {
+    it("should work on simple sentences", function () {
+      expect(propercase('lorem IPSUM Dolor sIT amet')).to.be.equal('Lorem Ipsum Dolor Sit Amet');
+      expect(propercase('a this is a simple but completely wrong sentence is'))
+         .to.be.equal('A This Is a Simple but Completely Wrong Sentence Is');
+      expect(propercase('nothing to be afraid of ')).to.be.equal('Nothing to Be Afraid Of');
+      expect(propercase('look - here it is')).to.be.equal('Look - Here It Is');
+      expect(propercase('this is part xii of the book')).to.be.equal('This Is Part XII of the Book');
+      expect(propercase("i'm not trying to fix urls: http://google.com"))
+          .to.be.equal("I'm not Trying to Fix URLs: http://google.com");
+      expect(propercase('a doctor of philosophy (phd) is the highest academic degree'))
+          .to.be.equal('A Doctor of Philosophy (PhD) Is the Highest Academic Degree');
+      expect(propercase('first. a thing')).to.be.equal('First. A Thing');
+      expect(propercase('first: a thing')).to.be.equal('First: A Thing');
     });
   });
 });
