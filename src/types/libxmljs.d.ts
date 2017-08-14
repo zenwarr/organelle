@@ -9,10 +9,10 @@ declare module "libxmljs" {
   import events = require('events');
 
   export function parseXml(source: string): Document;
-  export function parseHtml(source: string): HTMLDocument;
+  export function parseHtml(source: string): HtmlDocument;
   export function parseXmlString(source: string): Document;
-  export function parseHtmlString(source: string): HTMLDocument;
-  export function parseHtmlFragment(source: string): HTMLDocument;
+  export function parseHtmlString(source: string): HtmlDocument;
+  export function parseHtmlFragment(source: string): HtmlDocument;
   export function memoryUsage(): number;
   export function nodeCount(): number;
   export const version: string;
@@ -70,9 +70,13 @@ declare module "libxmljs" {
 
   export const Document: DocumentConstructor;
 
+  export interface HtmlDocument extends Document {
+
+  }
+
   export interface Node {
     doc(): Document;
-    parent(): Node | XMLDocument | null;
+    parent(): Node | Document | null;
     prevSibling(): Node | null;
     nextSibling(): Node | null;
     line(): number;
@@ -100,7 +104,7 @@ declare module "libxmljs" {
     attr(attr: Attribute): Element;
     attr(attrObject: { [key: string]: string; }): Element;
     attrs(): Attribute[];
-    parent(): Element | XMLDocument | null;
+    parent(): Element | Document | null;
     child(idx: number): Element | null;
     childNodes(): Element[];
     addChild(child: Element): Element;
