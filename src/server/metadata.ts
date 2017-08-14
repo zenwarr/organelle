@@ -1,6 +1,8 @@
+import {Person, RelatedPerson} from "./library-db";
+
 export interface ExtractedMetadata {
-  author: string;
   title: string;
+  persons: RelatedPerson[];
 }
 
 export abstract class MetadataParser {
