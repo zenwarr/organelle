@@ -21,779 +21,783 @@ const TEST_UUID3 = 'c17aa4e4-f36e-42b1-9026-70d9c0457b75';
 
 const TEST_VERSION = 42;
 
-describe("DatabaseWithOptions", function() {
-  let tmpFile: tmp.SynchrounousResult;
-
-  beforeEach(() => {
-    tmpFile = tmp.fileSync();
-  });
-
-  describe("create/open", function() {
-    it("should create db and load existing one", async function() {
-      let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      await db.create();
-
-      expect(db.filename).to.be.equal(tmpFile.name);
-      expect(db.getOption("uuid")).not.to.be.null;
-
-      let loadingDb = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      await loadingDb.open();
-
-      expect(loadingDb.getOption("uuid")).to.be.equal(db.getOption("uuid"));
-      expect(loadingDb.filename).to.be.equal(tmpFile.name);
-    });
-
-    it('should not allow call open/create on same database twice', async function() {
-      let db = new DatabaseWithOptions(":memory:", TEST_VERSION);
-      await db.create();
-
-      return expect(db.create()).to.be.rejected;
-    });
-
-    it('should not open non-existent database', function() {
-      let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      return expect(db.open()).to.be.rejected;
-    });
-
-    it('should not create already existing database', async function() {
-      let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      await db.create();
-
-      let anotherDb = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      return expect(anotherDb.create()).to.be.rejected;
-    });
-
-    it('new uuid for storage should be created', async function() {
-      let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      await db.create();
-
-      expect(db.getOption(ConfigOption.Uuid)).to.not.be.null;
-    });
-  });
-
-  describe("getOption/setOption", function() {
-    let db: DatabaseWithOptions;
-
-    beforeEach(function() {
-      db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      return db.create();
-    });
-
-    it("get/set", async function() {
-      await db.setOption('test', 'test value');
-      expect(db.getOption('test')).to.be.equal('test value');
-    });
-
-    it('option names should be case-insensitive', async function() {
-      await db.setOption('test', 'test value');
-      expect(db.getOption("Test")).to.be.equal("test value");
-    });
-
-    it('options should be loaded again', async function() {
-      await db.setOption('test', 'test value');
-      let loadingDb = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
-      await loadingDb.open();
-      expect(loadingDb.getOption('Test')).to.be.equal('test value');
-    });
-
-    it('options that not exists should be null', function() {
-      expect(db.getOption('nonexistent')).to.be.null;
-    });
-  });
-});
-
-describe("StorageDatabase", function() {
-  describe("objects manipulation", function() {
-    let storage: StorageDatabase;
+describe('dbs', function() {
+  describe("DatabaseWithOptions", function() {
+    let tmpFile: tmp.SynchrounousResult;
 
     beforeEach(() => {
-      storage = new StorageDatabase(":memory:");
-      return storage.create();
+      tmpFile = tmp.fileSync();
     });
 
-    it('object should be registered without errors', async function() {
-      let obj = await storage.registerObject({ uuid: null, location: '/path/to/fake/location' });
-      expect(obj.uuid).to.not.be.null;
-      expect(obj.location).to.be.equal('/path/to/fake/location');
-    });
+    describe("create/open", function() {
+      it("should create db and load existing one", async function() {
+        let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        await db.create();
 
-    it('object uuid should not be changed if specified', async function() {
-      let obj = await storage.registerObject({uuid: TEST_UUID, location: '/path/to/fake/location' });
-      expect(obj.uuid).to.be.equal(TEST_UUID);
-    });
+        expect(db.filename).to.be.equal(tmpFile.name);
+        expect(db.getOption("uuid")).not.to.be.null;
 
-    it('object should not be accessible without registering', function() {
-      storage.getObject(TEST_UUID).should.eventually.be.null;
-    });
+        let loadingDb = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        await loadingDb.open();
 
-    it('object should be accessible after registering', async function() {
-      await storage.registerObject({ uuid: TEST_UUID, location: '/path/to/fake/location' });
-      let obj = await storage.getObject(TEST_UUID);
-      expect(obj).not.to.be.null;
-      if (obj != null) {
-        expect(obj.uuid).to.be.equal(TEST_UUID);
-        expect(obj.location).to.be.equal('/path/to/fake/location');
-      }
-    });
-
-    it('duplicates should not be allowed', async function() {
-      await storage.registerObject({ uuid: TEST_UUID, location: '/path/to/fake/location' });
-      return storage.registerObject({ uuid: TEST_UUID, location: '/another/path' }).should.be.rejected;
-    });
-
-    it('empty location should not be allowed', function() {
-      return storage.registerObject({ uuid: null, location: '' }).should.be.rejected;
-    });
-  });
-
-  describe('updateObject/unregisterObject', function() {
-    let storage: StorageDatabase;
-
-    beforeEach(async function() {
-      storage = new StorageDatabase(':memory:');
-      await storage.create();
-
-      return Promise.all([
-          storage.registerObject({ uuid: TEST_UUID, location: '/location/1/ '}),
-          storage.registerObject({ uuid: TEST_UUID2, location: '/location/2/'})
-      ]);
-    });
-
-    it('should update an object', async function() {
-      let obj = await storage.updateObject({ uuid: TEST_UUID2, location: '/new/location'} );
-      expect(obj).to.have.property('location', '/new/location');
-
-      let dbObj = await storage.getObject(TEST_UUID2);
-      expect(dbObj).to.have.property('uuid', TEST_UUID2);
-      expect(dbObj).to.have.property('location', '/new/location');
-    });
-
-    it('should not update a non-existent object', function() {
-      return expect(storage.updateObject({ uuid: TEST_UUID3, location: '/new/location' })).to.be.rejected;
-    });
-
-    it('should unregister an object', function() {
-      return storage.unregisterObject(TEST_UUID2).should.be.fulfilled;
-    });
-
-    it('unreigstered object should be accessible after', async function() {
-      await storage.unregisterObject(TEST_UUID2);
-      return storage.getObject(TEST_UUID2).should.eventually.be.null;
-    });
-
-    it('should fail when unregistering non-existent object', function() {
-      return storage.unregisterObject(TEST_UUID3).should.be.rejected;
-    });
-  });
-});
-
-describe("LibraryDatabase", function () {
-  describe("Group types initialization", function () {
-    it("should add known group types", async function () {
-      let db = new LibraryDatabase(':memory:');
-      await db.create();
-
-      let gt = db.getGroupType(KnownGroupTypes.Tag);
-      expect(gt).not.to.be.null;
-      if (gt != null) {
-        expect(gt.uuid).to.be.equal(KnownGroupTypes.Tag);
-      }
-    });
-  });
-
-  describe("Group types", function () {
-    let db: LibraryDatabase;
-
-    beforeEach(function () {
-      db = new LibraryDatabase(':memory:');
-      return db.create();
-    });
-
-    it("should add group types", async function () {
-      let newType = await db.addGroupType({ name: 'custom group type', ordered: false, exclusive: true });
-      expect(newType.uuid).to.not.be.null;
-      expect(newType.name).to.be.equal('custom group type');
-      expect(newType.ordered).to.be.false;
-      expect(newType.exclusive).to.be.true;
-    });
-
-    it("should remove group types", async function () {
-      expect(db.getGroupType(KnownGroupTypes.Language)).to.not.be.null;
-      await db.removeGroupType(KnownGroupTypes.Language);
-      expect(db.getGroupType(KnownGroupTypes.Language)).to.be.null;
-    });
-
-    it("should not allow removing nonexistent group types", async function () {
-      expect(db.getGroupType(TEST_UUID2)).to.be.null;
-      await db.removeGroupType(TEST_UUID2).should.be.rejected;
-      expect(db.getGroupType(TEST_UUID2)).to.be.null;
-    });
-
-    it("should update types", async function () {
-      let oldType = db.getGroupType(KnownGroupTypes.Tag);
-      expect(oldType).to.have.property('name', 'tags');
-
-      await db.updateGroupType({ uuid: KnownGroupTypes.Tag, name: 'new name for tags',
-              ordered: true, exclusive: true });
-
-      expect(oldType).to.have.property('name', 'tags');
-      expect(oldType).to.have.property('uuid', KnownGroupTypes.Tag);
-
-      let retType = db.getGroupType(KnownGroupTypes.Tag);
-      expect(retType).to.have.property('uuid', KnownGroupTypes.Tag);
-      expect(retType).to.have.property('name', 'new name for tags');
-    });
-  });
-
-  describe("Persons", function () {
-    let db: LibraryDatabase;
-
-    beforeEach(async function () {
-      db = new LibraryDatabase(':memory:');
-      await db.create();
-    });
-
-    it("should not get nonexistent persons", function () {
-      return db.getPerson(TEST_UUID2).should.eventually.be.null;
-    });
-
-    it("should add persons", async function () {
-      let person = await db.addPerson({
-        name: 'Mark Twain',
-        nameSort: 'Twain, Mark'
+        expect(loadingDb.getOption("uuid")).to.be.equal(db.getOption("uuid"));
+        expect(loadingDb.filename).to.be.equal(tmpFile.name);
       });
 
-      expect(person.uuid).not.to.be.null;
-      expect(person.name).to.be.equal('Mark Twain');
-      expect(person.nameSort).to.be.equal('Twain, Mark');
+      it('should not allow call open/create on same database twice', async function() {
+        let db = new DatabaseWithOptions(":memory:", TEST_VERSION);
+        await db.create();
 
-      if (person.uuid != null) {
-        let getPerson = await db.getPerson(person.uuid);
+        return expect(db.create()).to.be.rejected;
+      });
 
-        expect(getPerson).not.to.be.null;
-        if (getPerson != null) {
-          expect(getPerson.uuid).to.be.equal(person.uuid);
-          expect(getPerson.name).to.be.equal('Mark Twain');
-          expect(getPerson.nameSort).to.be.equal('Twain, Mark');
-        }
-      }
+      it('should not open non-existent database', function() {
+        let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        return expect(db.open()).to.be.rejected;
+      });
+
+      it('should not create already existing database', async function() {
+        let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        await db.create();
+
+        let anotherDb = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        return expect(anotherDb.create()).to.be.rejected;
+      });
+
+      it('new uuid for storage should be created', async function() {
+        let db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        await db.create();
+
+        expect(db.getOption(ConfigOption.Uuid)).to.not.be.null;
+      });
     });
 
-    describe("More persons", function () {
+    describe("getOption/setOption", function() {
+      let db: DatabaseWithOptions;
+
+      beforeEach(function() {
+        db = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        return db.create();
+      });
+
+      it("get/set", async function() {
+        await db.setOption('test', 'test value');
+        expect(db.getOption('test')).to.be.equal('test value');
+      });
+
+      it('option names should be case-insensitive', async function() {
+        await db.setOption('test', 'test value');
+        expect(db.getOption("Test")).to.be.equal("test value");
+      });
+
+      it('options should be loaded again', async function() {
+        await db.setOption('test', 'test value');
+        let loadingDb = new DatabaseWithOptions(tmpFile.name, TEST_VERSION);
+        await loadingDb.open();
+        expect(loadingDb.getOption('Test')).to.be.equal('test value');
+      });
+
+      it('options that not exists should be null', function() {
+        expect(db.getOption('nonexistent')).to.be.null;
+      });
+    });
+  });
+
+  describe("StorageDatabase", function() {
+    describe("objects manipulation", function() {
+      let storage: StorageDatabase;
+
+      beforeEach(() => {
+        storage = new StorageDatabase(":memory:");
+        return storage.create();
+      });
+
+      it('object should be registered without errors', async function() {
+        let obj = await storage.registerObject({ uuid: null, location: '/path/to/fake/location' });
+        expect(obj.uuid).to.not.be.null;
+        expect(obj.location).to.be.equal('/path/to/fake/location');
+      });
+
+      it('object uuid should not be changed if specified', async function() {
+        let obj = await storage.registerObject({uuid: TEST_UUID, location: '/path/to/fake/location' });
+        expect(obj.uuid).to.be.equal(TEST_UUID);
+      });
+
+      it('object should not be accessible without registering', function() {
+        storage.getObject(TEST_UUID).should.eventually.be.null;
+      });
+
+      it('object should be accessible after registering', async function() {
+        await storage.registerObject({ uuid: TEST_UUID, location: '/path/to/fake/location' });
+        let obj = await storage.getObject(TEST_UUID);
+        expect(obj).not.to.be.null;
+        if (obj != null) {
+          expect(obj.uuid).to.be.equal(TEST_UUID);
+          expect(obj.location).to.be.equal('/path/to/fake/location');
+        }
+      });
+
+      it('duplicates should not be allowed', async function() {
+        await storage.registerObject({ uuid: TEST_UUID, location: '/path/to/fake/location' });
+        return storage.registerObject({ uuid: TEST_UUID, location: '/another/path' }).should.be.rejected;
+      });
+
+      it('empty location should not be allowed', function() {
+        return storage.registerObject({ uuid: null, location: '' }).should.be.rejected;
+      });
+    });
+
+    describe('updateObject/unregisterObject', function() {
+      let storage: StorageDatabase;
+
+      beforeEach(async function() {
+        storage = new StorageDatabase(':memory:');
+        await storage.create();
+
+        return Promise.all([
+          storage.registerObject({ uuid: TEST_UUID, location: '/location/1/ '}),
+          storage.registerObject({ uuid: TEST_UUID2, location: '/location/2/'})
+        ]);
+      });
+
+      it('should update an object', async function() {
+        let obj = await storage.updateObject({ uuid: TEST_UUID2, location: '/new/location'} );
+        expect(obj).to.have.property('location', '/new/location');
+
+        let dbObj = await storage.getObject(TEST_UUID2);
+        expect(dbObj).to.have.property('uuid', TEST_UUID2);
+        expect(dbObj).to.have.property('location', '/new/location');
+      });
+
+      it('should not update a non-existent object', function() {
+        return expect(storage.updateObject({ uuid: TEST_UUID3, location: '/new/location' })).to.be.rejected;
+      });
+
+      it('should unregister an object', function() {
+        return storage.unregisterObject(TEST_UUID2).should.be.fulfilled;
+      });
+
+      it('unreigstered object should be accessible after', async function() {
+        await storage.unregisterObject(TEST_UUID2);
+        return storage.getObject(TEST_UUID2).should.eventually.be.null;
+      });
+
+      it('should fail when unregistering non-existent object', function() {
+        return storage.unregisterObject(TEST_UUID3).should.be.rejected;
+      });
+    });
+  });
+
+  describe("LibraryDatabase", function () {
+    describe("Group types initialization", function () {
+      it("should add known group types", async function () {
+        let db = new LibraryDatabase(':memory:');
+        await db.create();
+
+        let gt = db.getGroupType(KnownGroupTypes.Tag);
+        expect(gt).not.to.be.null;
+        if (gt != null) {
+          expect(gt.uuid).to.be.equal(KnownGroupTypes.Tag);
+        }
+      });
+    });
+
+    describe("Group types", function () {
+      let db: LibraryDatabase;
+
+      beforeEach(function () {
+        db = new LibraryDatabase(':memory:');
+        return db.create();
+      });
+
+      it("should add group types", async function () {
+        let newType = await db.addGroupType({ name: 'custom group type', ordered: false, exclusive: true });
+        expect(newType.uuid).to.not.be.null;
+        expect(newType.name).to.be.equal('custom group type');
+        expect(newType.ordered).to.be.false;
+        expect(newType.exclusive).to.be.true;
+      });
+
+      it("should remove group types", async function () {
+        expect(db.getGroupType(KnownGroupTypes.Language)).to.not.be.null;
+        await db.removeGroupType(KnownGroupTypes.Language);
+        expect(db.getGroupType(KnownGroupTypes.Language)).to.be.null;
+      });
+
+      it("should not allow removing nonexistent group types", async function () {
+        expect(db.getGroupType(TEST_UUID2)).to.be.null;
+        await db.removeGroupType(TEST_UUID2).should.be.rejected;
+        expect(db.getGroupType(TEST_UUID2)).to.be.null;
+      });
+
+      it("should update types", async function () {
+        let oldType = db.getGroupType(KnownGroupTypes.Tag);
+        expect(oldType).to.have.property('name', 'tags');
+
+        await db.updateGroupType({ uuid: KnownGroupTypes.Tag, name: 'new name for tags',
+          ordered: true, exclusive: true });
+
+        expect(oldType).to.have.property('name', 'tags');
+        expect(oldType).to.have.property('uuid', KnownGroupTypes.Tag);
+
+        let retType = db.getGroupType(KnownGroupTypes.Tag);
+        expect(retType).to.have.property('uuid', KnownGroupTypes.Tag);
+        expect(retType).to.have.property('name', 'new name for tags');
+      });
+    });
+
+    describe("Persons", function () {
+      let db: LibraryDatabase;
+
       beforeEach(async function () {
-        await db.addPerson({
-          uuid: TEST_UUID,
+        db = new LibraryDatabase(':memory:');
+        await db.create();
+      });
+
+      it("should not get nonexistent persons", function () {
+        return db.getPerson(TEST_UUID2).should.eventually.be.null;
+      });
+
+      it("should add persons", async function () {
+        let person = await db.addPerson({
           name: 'Mark Twain',
           nameSort: 'Twain, Mark'
         });
 
-        await db.addPerson({
-          uuid: TEST_UUID2,
-          name: 'Stephen King',
-          nameSort: 'King, Stephen'
-        });
+        expect(person.uuid).not.to.be.null;
+        expect(person.name).to.be.equal('Mark Twain');
+        expect(person.nameSort).to.be.equal('Twain, Mark');
 
-        await db.addPerson({
-          uuid: TEST_UUID3,
-          name: 'Fyodor Dostoevsky',
-          nameSort: 'Dostoevsky, Fyodor'
-        });
-      });
+        if (person.uuid != null) {
+          let getPerson = await db.getPerson(person.uuid);
 
-      it("should remove persons", async function () {
-        await db.getPerson(TEST_UUID2).should.eventually.be.not.null;
-
-        await db.removePerson(TEST_UUID2);
-
-        return db.getPerson(TEST_UUID2).should.eventually.be.null;
-      });
-
-      it("should update persons", async function () {
-        let person = await db.getPerson(TEST_UUID2);
-        expect(person).not.to.be.null;
-        if (person != null) {
-          expect(person.uuid).to.be.equal(TEST_UUID2);
-          expect(person.name).to.be.equal('Stephen King');
-        }
-
-        await db.updatePerson({
-          uuid: TEST_UUID2,
-          name: 'King of Horrors',
-          nameSort: 'Horrors of King'
-        });
-
-        let getPerson = await db.getPerson(TEST_UUID2);
-        expect(getPerson).not.to.be.null;
-        if (getPerson != null) {
-          expect(getPerson.name).to.be.equal('King of Horrors');
-          expect(getPerson.nameSort).to.be.equal('Horrors of King');
-        }
-      });
-    });
-  });
-
-  describe("Resources", function () {
-    let db: LibraryDatabase;
-
-    beforeEach(function () {
-      db = new LibraryDatabase(':memory:');
-      return db.create();
-    });
-
-    it("should add a resource with default values", async function () {
-      let clock = sinon.useFakeTimers();
-      clock.tick(10000);
-
-      try {
-        let res = await db.addResource({
-          title: 'Some book',
-          titleSort: 'Some book'
-        });
-
-        function testObject(res: Resource) {
-          expect(res.title).to.be.equal('Some book');
-          expect(res.titleSort).to.be.equal('Some book');
-          expect(res.rating == null).to.be.true;
-          expect(res.addDate == null).to.not.be.true;
-          if (res.addDate != null) {
-            expect(dateToTimestamp(res.addDate)).to.be.equal(10);
+          expect(getPerson).not.to.be.null;
+          if (getPerson != null) {
+            expect(getPerson.uuid).to.be.equal(person.uuid);
+            expect(getPerson.name).to.be.equal('Mark Twain');
+            expect(getPerson.nameSort).to.be.equal('Twain, Mark');
           }
-          expect(res.lastModifyDate == null).to.not.be.true;
-          if (res.lastModifyDate != null) {
-            expect(dateToTimestamp(res.lastModifyDate)).to.be.equal(10);
-          }
-          expect(res.publishDate == null).to.be.true;
-          expect(res.publisher == null).to.be.true;
-          expect(res.desc == null).to.be.true;
         }
-
-        testObject(res);
-
-        let res2 = await db.getResource((res as Resource).uuid as string);
-        testObject(res2 as Resource);
-      } finally {
-        clock.restore();
-      }
-    });
-
-    it("should update only specific fields of a resource", async function () {
-      await db.addResource({
-        uuid: MIST,
-        title: "The Mist",
-        titleSort: "Mist, The",
-        rating: 400,
-        addDate: new Date(),
-        lastModifyDate: new Date(),
-        publishDate: "1980",
-        publisher: "Viking Press",
-        desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters."
       });
 
-      await db.getResource(MIST).should.eventually.have.property('title', 'The Mist');
-      await db.getResource(MIST).should.eventually.have.property('publishDate', '1980');
-      await db.getResource(MIST).should.eventually.have.property('rating', 400);
+      describe("More persons", function () {
+        beforeEach(async function () {
+          await db.addPerson({
+            uuid: TEST_UUID,
+            name: 'Mark Twain',
+            nameSort: 'Twain, Mark'
+          });
 
-      await db.updateResource({
-        uuid: MIST,
-        rating: 300
+          await db.addPerson({
+            uuid: TEST_UUID2,
+            name: 'Stephen King',
+            nameSort: 'King, Stephen'
+          });
+
+          await db.addPerson({
+            uuid: TEST_UUID3,
+            name: 'Fyodor Dostoevsky',
+            nameSort: 'Dostoevsky, Fyodor'
+          });
+        });
+
+        it("should remove persons", async function () {
+          await db.getPerson(TEST_UUID2).should.eventually.be.not.null;
+
+          await db.removePerson(TEST_UUID2);
+
+          return db.getPerson(TEST_UUID2).should.eventually.be.null;
+        });
+
+        it("should update persons", async function () {
+          let person = await db.getPerson(TEST_UUID2);
+          expect(person).not.to.be.null;
+          if (person != null) {
+            expect(person.uuid).to.be.equal(TEST_UUID2);
+            expect(person.name).to.be.equal('Stephen King');
+          }
+
+          await db.updatePerson({
+            uuid: TEST_UUID2,
+            name: 'King of Horrors',
+            nameSort: 'Horrors of King'
+          });
+
+          let getPerson = await db.getPerson(TEST_UUID2);
+          expect(getPerson).not.to.be.null;
+          if (getPerson != null) {
+            expect(getPerson.name).to.be.equal('King of Horrors');
+            expect(getPerson.nameSort).to.be.equal('Horrors of King');
+          }
+        });
+      });
+    });
+
+    describe("Resources", function () {
+      let db: LibraryDatabase;
+
+      beforeEach(function () {
+        db = new LibraryDatabase(':memory:');
+        return db.create();
       });
 
-      await db.getResource(MIST).should.eventually.have.property('title', 'The Mist');
-      await db.getResource(MIST).should.eventually.have.property('publishDate', '1980');
-      await db.getResource(MIST).should.eventually.have.property('rating', 300);
+      it("should add a resource with default values", async function () {
+        let clock = sinon.useFakeTimers();
+        clock.tick(10000);
+
+        console.log((new Date()).toUTCString());
+
+        try {
+          let res = await db.addResource({
+            title: 'Some book',
+            titleSort: 'Some book'
+          });
+
+          function testObject(res: Resource) {
+            expect(res.title).to.be.equal('Some book');
+            expect(res.titleSort).to.be.equal('Some book');
+            expect(res.rating == null).to.be.true;
+            expect(res.addDate == null).to.not.be.true;
+            if (res.addDate != null) {
+              expect(dateToTimestamp(res.addDate)).to.be.equal(10);
+            }
+            expect(res.lastModifyDate == null).to.not.be.true;
+            if (res.lastModifyDate != null) {
+              expect(dateToTimestamp(res.lastModifyDate)).to.be.equal(10);
+            }
+            expect(res.publishDate == null).to.be.true;
+            expect(res.publisher == null).to.be.true;
+            expect(res.desc == null).to.be.true;
+          }
+
+          testObject(res);
+
+          let res2 = await db.getResource((res as Resource).uuid as string);
+          testObject(res2 as Resource);
+        } finally {
+          clock.restore();
+        }
+      });
+
+      it("should update only specific fields of a resource", async function () {
+        await db.addResource({
+          uuid: MIST,
+          title: "The Mist",
+          titleSort: "Mist, The",
+          rating: 400,
+          addDate: new Date(),
+          lastModifyDate: new Date(),
+          publishDate: "1980",
+          publisher: "Viking Press",
+          desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters."
+        });
+
+        await db.getResource(MIST).should.eventually.have.property('title', 'The Mist');
+        await db.getResource(MIST).should.eventually.have.property('publishDate', '1980');
+        await db.getResource(MIST).should.eventually.have.property('rating', 400);
+
+        await db.updateResource({
+          uuid: MIST,
+          rating: 300
+        });
+
+        await db.getResource(MIST).should.eventually.have.property('title', 'The Mist');
+        await db.getResource(MIST).should.eventually.have.property('publishDate', '1980');
+        await db.getResource(MIST).should.eventually.have.property('rating', 300);
+      });
     });
-  });
 
-  describe("Relations", function () {
-    let db: LibraryDatabase;
+    describe("Relations", function () {
+      let db: LibraryDatabase;
 
-    beforeEach(async function () {
-      db = new LibraryDatabase(':memory:');
-      await db.create();
-
-      await fillTestData(db);
-    });
-
-    it("should add relations between resource and author", async function () {
-      await db.addPersonRelation(MIST, KING, PersonRelation.Author);
-
-      let related = await db.relatedPersons(MIST);
-      expect(related).to.not.be.null;
-      expect(related).to.have.lengthOf(1);
-      expect(related[0]).to.not.be.null;
-      expect(related[0].uuid).to.be.equal(KING);
-
-      await db.addPersonRelation(TOLL, HEMINGWAY, PersonRelation.Author);
-
-      let related2 = await db.relatedPersons(TOLL);
-      expect(related2).to.not.be.null;
-      expect(related2).to.have.lengthOf(1);
-      expect(related2[0]).to.not.be.null;
-      expect(related2[0].uuid).to.be.equal(HEMINGWAY);
-    });
-
-    it("should not add duplicate relations", async function () {
-      await db.addPersonRelation(MIST, KING, PersonRelation.Author);
-      await db.addPersonRelation(MIST, KING, PersonRelation.Editor);
-      return db.addPersonRelation(MIST, KING, PersonRelation.Author).should.be.rejected;
-    });
-
-    describe("More person relations", function () {
       beforeEach(async function () {
+        db = new LibraryDatabase(':memory:');
+        await db.create();
+
+        await fillTestData(db);
+      });
+
+      it("should add relations between resource and author", async function () {
         await db.addPersonRelation(MIST, KING, PersonRelation.Author);
-        await db.addPersonRelation(MIST, PERSON1, PersonRelation.Editor);
-        await db.addPersonRelation(MIST, PERSON2, PersonRelation.Editor);
-        await db.addPersonRelation(MIST, PERSON2, PersonRelation.Translator);
+
+        let related = await db.relatedPersons(MIST);
+        expect(related).to.not.be.null;
+        expect(related).to.have.lengthOf(1);
+        expect(related[0]).to.not.be.null;
+        expect(related[0].uuid).to.be.equal(KING);
+
+        await db.addPersonRelation(TOLL, HEMINGWAY, PersonRelation.Author);
+
+        let related2 = await db.relatedPersons(TOLL);
+        expect(related2).to.not.be.null;
+        expect(related2).to.have.lengthOf(1);
+        expect(related2[0]).to.not.be.null;
+        expect(related2[0].uuid).to.be.equal(HEMINGWAY);
       });
 
-      it("should query relations of specific type", async function () {
-        let rel = await db.relatedPersons(MIST, PersonRelation.Translator);
+      it("should not add duplicate relations", async function () {
+        await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+        await db.addPersonRelation(MIST, KING, PersonRelation.Editor);
+        return db.addPersonRelation(MIST, KING, PersonRelation.Author).should.be.rejected;
+      });
+
+      describe("More person relations", function () {
+        beforeEach(async function () {
+          await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+          await db.addPersonRelation(MIST, PERSON1, PersonRelation.Editor);
+          await db.addPersonRelation(MIST, PERSON2, PersonRelation.Editor);
+          await db.addPersonRelation(MIST, PERSON2, PersonRelation.Translator);
+        });
+
+        it("should query relations of specific type", async function () {
+          let rel = await db.relatedPersons(MIST, PersonRelation.Translator);
+          expect(rel).to.have.lengthOf(1);
+          expect(rel[0]).to.have.property('uuid', PERSON2);
+        });
+
+        it("should query multiple relations of specific type", async function () {
+          let rel = await db.relatedPersons(MIST, PersonRelation.Editor);
+          expect(rel).to.have.lengthOf(2);
+          expect(rel[0].uuid).to.be.oneOf([PERSON1, PERSON2]);
+          expect(rel[1].uuid).to.be.oneOf([PERSON1, PERSON2]);
+          expect(rel[0].uuid).to.not.be.equal(rel[1].uuid);
+        });
+
+        it("should remove specific relation", async function () {
+          let relBefore = await db.relatedPersons(MIST);
+          expect(relBefore).to.have.lengthOf(4);
+
+          await db.removePersonRelations(MIST, PERSON2, PersonRelation.Editor);
+
+          let relAfter = await db.relatedPersons(MIST);
+          expect(relAfter).to.have.lengthOf(3);
+        });
+      });
+
+      it("should add relations between resource and group", async function () {
+        await db.addGroupRelation(MIST, LANG_RUSSIAN);
+
+        let rel = await db.relatedGroups(MIST);
+
+        expect(rel).to.not.be.null;
         expect(rel).to.have.lengthOf(1);
-        expect(rel[0]).to.have.property('uuid', PERSON2);
+        expect(rel[0]).to.not.be.null;
+        expect(rel[0].uuid).to.be.equal(LANG_RUSSIAN);
       });
 
-      it("should query multiple relations of specific type", async function () {
-        let rel = await db.relatedPersons(MIST, PersonRelation.Editor);
-        expect(rel).to.have.lengthOf(2);
-        expect(rel[0].uuid).to.be.oneOf([PERSON1, PERSON2]);
-        expect(rel[1].uuid).to.be.oneOf([PERSON1, PERSON2]);
-        expect(rel[0].uuid).to.not.be.equal(rel[1].uuid);
+      it('should not add two relations between exclusive group types', async function () {
+        await db.addGroupRelation(MIST, CATEGORY1);
+        return db.addGroupRelation(MIST, CATEGORY2).should.be.rejected;
       });
 
-      it("should remove specific relation", async function () {
-        let relBefore = await db.relatedPersons(MIST);
-        expect(relBefore).to.have.lengthOf(4);
+      it("should not add duplicate relations even for non-exclusive types", async function () {
+        await db.addGroupRelation(MIST, TAG1);
+        return db.addGroupRelation(MIST, TAG1).should.be.rejected;
+      });
 
-        await db.removePersonRelations(MIST, PERSON2, PersonRelation.Editor);
+      it("should not add group index to non-ordered groups", async function () {
+        db.addGroupRelation(MIST, TAG1, 10).should.be.rejected;
+      });
 
-        let relAfter = await db.relatedPersons(MIST);
-        expect(relAfter).to.have.lengthOf(3);
+      it("should not add a relation to non-existent group", async function () {
+        db.addGroupRelation(MIST, TEST_UUID2).should.be.rejected;
+      });
+
+      it("should remove group relations", async function () {
+        await db.addGroupRelation(MIST, LANG_ENGLISH);
+        expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(1);
+
+        await db.removeGroupRelations(MIST, LANG_ENGLISH);
+        expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(0);
+      });
+
+      it("should remove relations of specific group type", async function () {
+        await db.addGroupRelation(MIST, TAG1);
+        await db.addGroupRelation(MIST, TAG2);
+        await db.addGroupRelation(MIST, LANG_ENGLISH);
+        await db.addGroupRelation(MIST, LANG_RUSSIAN);
+        await db.addGroupRelation(MIST, CATEGORY1);
+
+        expect(await db.relatedGroups(MIST)).to.have.lengthOf(5);
+
+        await db.removeGroupRelations(MIST, undefined, db.getGroupType(KnownGroupTypes.Language) as GroupType);
+
+        expect(await db.relatedGroups(MIST)).to.have.lengthOf(3);
+      });
+
+      it("should remove a resource with relations", async function () {
+        await db.addGroupRelation(MIST, TAG1);
+        return db.removeResource(MIST).should.be.fulfilled;
+      });
+
+      it("should remove a resource with person relations", async function () {
+        await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+        await db.addPersonRelation(MIST, KING, PersonRelation.Editor);
+
+        await db.removeResource(MIST).should.be.fulfilled;
+
+        await db.getResource(MIST).should.eventually.be.null;
+        return db.getPerson(KING).should.eventually.not.be.null;
       });
     });
 
-    it("should add relations between resource and group", async function () {
-      await db.addGroupRelation(MIST, LANG_RUSSIAN);
+    describe("Time handling", function () {
+      let db: LibraryDatabase;
+      let clock: sinon.SinonFakeTimers;
 
-      let rel = await db.relatedGroups(MIST);
+      beforeEach(function () {
+        clock = sinon.useFakeTimers();
 
-      expect(rel).to.not.be.null;
-      expect(rel).to.have.lengthOf(1);
-      expect(rel[0]).to.not.be.null;
-      expect(rel[0].uuid).to.be.equal(LANG_RUSSIAN);
-    });
-
-    it('should not add two relations between exclusive group types', async function () {
-      await db.addGroupRelation(MIST, CATEGORY1);
-      return db.addGroupRelation(MIST, CATEGORY2).should.be.rejected;
-    });
-
-    it("should not add duplicate relations even for non-exclusive types", async function () {
-      await db.addGroupRelation(MIST, TAG1);
-      return db.addGroupRelation(MIST, TAG1).should.be.rejected;
-    });
-
-    it("should not add group index to non-ordered groups", async function () {
-      db.addGroupRelation(MIST, TAG1, 10).should.be.rejected;
-    });
-
-    it("should not add a relation to non-existent group", async function () {
-      db.addGroupRelation(MIST, TEST_UUID2).should.be.rejected;
-    });
-
-    it("should remove group relations", async function () {
-      await db.addGroupRelation(MIST, LANG_ENGLISH);
-      expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(1);
-
-      await db.removeGroupRelations(MIST, LANG_ENGLISH);
-      expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(0);
-    });
-
-    it("should remove relations of specific group type", async function () {
-      await db.addGroupRelation(MIST, TAG1);
-      await db.addGroupRelation(MIST, TAG2);
-      await db.addGroupRelation(MIST, LANG_ENGLISH);
-      await db.addGroupRelation(MIST, LANG_RUSSIAN);
-      await db.addGroupRelation(MIST, CATEGORY1);
-
-      expect(await db.relatedGroups(MIST)).to.have.lengthOf(5);
-
-      await db.removeGroupRelations(MIST, undefined, db.getGroupType(KnownGroupTypes.Language) as GroupType);
-
-      expect(await db.relatedGroups(MIST)).to.have.lengthOf(3);
-    });
-
-    it("should remove a resource with relations", async function () {
-      await db.addGroupRelation(MIST, TAG1);
-      return db.removeResource(MIST).should.be.fulfilled;
-    });
-
-    it("should remove a resource with person relations", async function () {
-      await db.addPersonRelation(MIST, KING, PersonRelation.Author);
-      await db.addPersonRelation(MIST, KING, PersonRelation.Editor);
-
-      await db.removeResource(MIST).should.be.fulfilled;
-
-      await db.getResource(MIST).should.eventually.be.null;
-      return db.getPerson(KING).should.eventually.not.be.null;
-    });
-  });
-
-  describe("Time handling", function () {
-    let db: LibraryDatabase;
-    let clock: sinon.SinonFakeTimers;
-
-    beforeEach(function () {
-      clock = sinon.useFakeTimers();
-
-      db = new LibraryDatabase(':memory:');
-      return db.create();
-    });
-
-    afterEach(function () {
-      clock.restore();
-    });
-
-    it("addDate and lastModifyDate should be ignored", async function () {
-      let date = new Date();
-
-      clock.tick(10000);
-
-      let datePast = new Date();
-
-      await db.addResource({
-        uuid: TEST_UUID,
-        title: 'some title',
-        titleSort: 'some title sort',
-        rating: 0,
-        addDate: datePast,
-        lastModifyDate: datePast,
-        publishDate: '',
-        publisher: '',
-        desc: ''
+        db = new LibraryDatabase(':memory:');
+        return db.create();
       });
 
-      let res = await db.getResource(TEST_UUID) as Resource;
-      expect(res.uuid).to.be.equal(TEST_UUID);
-      expect(dateToTimestamp(res.addDate as Date)).to.be.equal(dateToTimestamp(datePast));
-      expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(dateToTimestamp(datePast));
-    });
-
-    it("should store adding date to addDate", async function () {
-      clock.tick(10000);
-
-      await db.addResource({
-        uuid: TEST_UUID,
-        title: 'some title',
-        titleSort: 'some title sort',
-        rating: 0,
-        addDate: undefined,
-        lastModifyDate: undefined,
-        publishDate: '',
-        publisher: '',
-        desc: ''
+      afterEach(function () {
+        clock.restore();
       });
 
-      let res = await db.getResource(TEST_UUID) as Resource;
-      expect(dateToTimestamp(res.addDate as Date)).to.be.equal(10);
-      expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(10);
-    });
+      it("addDate and lastModifyDate should be ignored", async function () {
+        let date = new Date();
 
-    it("should save modification date", async function () {
-      clock.tick(10000);
+        clock.tick(10000);
 
-      await db.addResource({
-        uuid: TEST_UUID,
-        title: 'some title',
-        titleSort: 'some title sort',
-        rating: 0,
-        addDate: undefined,
-        lastModifyDate: undefined,
-        publishDate: '',
-        publisher: '',
-        desc: ''
+        let datePast = new Date();
+
+        await db.addResource({
+          uuid: TEST_UUID,
+          title: 'some title',
+          titleSort: 'some title sort',
+          rating: 0,
+          addDate: datePast,
+          lastModifyDate: datePast,
+          publishDate: '',
+          publisher: '',
+          desc: ''
+        });
+
+        let res = await db.getResource(TEST_UUID) as Resource;
+        expect(res.uuid).to.be.equal(TEST_UUID);
+        expect(dateToTimestamp(res.addDate as Date)).to.be.equal(dateToTimestamp(datePast));
+        expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(dateToTimestamp(datePast));
       });
 
-      clock.tick(10000);
+      it("should store adding date to addDate", async function () {
+        clock.tick(10000);
 
-      await db.updateResource({
-        uuid: TEST_UUID,
-        title: 'some title 2',
-        titleSort: 'some title sort',
-        rating: 0,
-        addDate: undefined,
-        lastModifyDate: undefined,
-        publishDate: '',
-        publisher: '',
-        desc: ''
+        await db.addResource({
+          uuid: TEST_UUID,
+          title: 'some title',
+          titleSort: 'some title sort',
+          rating: 0,
+          addDate: undefined,
+          lastModifyDate: undefined,
+          publishDate: '',
+          publisher: '',
+          desc: ''
+        });
+
+        let res = await db.getResource(TEST_UUID) as Resource;
+        expect(dateToTimestamp(res.addDate as Date)).to.be.equal(10);
+        expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(10);
       });
 
-      let res = await db.getResource(TEST_UUID) as Resource;
-      expect(dateToTimestamp(res.addDate as Date)).to.be.equal(10);
-      expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(20);
-    });
+      it("should save modification date", async function () {
+        clock.tick(10000);
 
-    it('should store publishDate as a Date', async function () {
-      let date = new Date();
+        await db.addResource({
+          uuid: TEST_UUID,
+          title: 'some title',
+          titleSort: 'some title sort',
+          rating: 0,
+          addDate: undefined,
+          lastModifyDate: undefined,
+          publishDate: '',
+          publisher: '',
+          desc: ''
+        });
 
-      await db.addResource({
-        uuid: TEST_UUID,
-        title: 'some title',
-        titleSort: 'some title sort',
-        rating: 0,
-        addDate: date,
-        lastModifyDate: date,
-        publishDate: date,
-        publisher: '',
-        desc: ''
+        clock.tick(10000);
+
+        await db.updateResource({
+          uuid: TEST_UUID,
+          title: 'some title 2',
+          titleSort: 'some title sort',
+          rating: 0,
+          addDate: undefined,
+          lastModifyDate: undefined,
+          publishDate: '',
+          publisher: '',
+          desc: ''
+        });
+
+        let res = await db.getResource(TEST_UUID) as Resource;
+        expect(dateToTimestamp(res.addDate as Date)).to.be.equal(10);
+        expect(dateToTimestamp(res.lastModifyDate as Date)).to.be.equal(20);
       });
 
-      let res = await db.getResource(TEST_UUID) as Resource;
-      expect(res.uuid).to.be.equal(TEST_UUID);
-      expect(res.publishDate).to.be.instanceOf(Date);
-      expect(dateToTimestamp(res.publishDate as Date)).to.be.equal(dateToTimestamp(date));
-    });
+      it('should store publishDate as a Date', async function () {
+        let date = new Date();
 
-    it("should store publishDate as a string", async function () {
-      let date = new Date();
+        await db.addResource({
+          uuid: TEST_UUID,
+          title: 'some title',
+          titleSort: 'some title sort',
+          rating: 0,
+          addDate: date,
+          lastModifyDate: date,
+          publishDate: date,
+          publisher: '',
+          desc: ''
+        });
 
-      await db.addResource({
-        uuid: TEST_UUID,
-        title: 'some title',
-        titleSort: 'some title sort',
-        rating: 0,
-        addDate: date,
-        lastModifyDate: date,
-        publishDate: '5th century',
-        publisher: '',
-        desc: ''
+        let res = await db.getResource(TEST_UUID) as Resource;
+        expect(res.uuid).to.be.equal(TEST_UUID);
+        expect(res.publishDate).to.be.instanceOf(Date);
+        expect(dateToTimestamp(res.publishDate as Date)).to.be.equal(dateToTimestamp(date));
       });
 
-      let res = await db.getResource(TEST_UUID) as Resource;
-      expect(res.uuid).to.be.equal(TEST_UUID);
-      expect(res.publishDate as string).to.be.equal('5th century');
-    });
-  });
+      it("should store publishDate as a string", async function () {
+        let date = new Date();
 
-  describe("Type checking", function () {
-    let db: LibraryDatabase;
+        await db.addResource({
+          uuid: TEST_UUID,
+          title: 'some title',
+          titleSort: 'some title sort',
+          rating: 0,
+          addDate: date,
+          lastModifyDate: date,
+          publishDate: '5th century',
+          publisher: '',
+          desc: ''
+        });
 
-    beforeEach(function () {
-      db = new LibraryDatabase(':memory:');
-      return db.create();
-    });
-
-    it("should not allow setting invalid rating", async function () {
-      await db.addResource({
-        uuid: TEST_UUID,
-        title: 'some title',
-        titleSort: 'some title sort',
-        rating: 530,
-        publishDate: '',
-        publisher: '',
-        desc: ''
-      }).should.be.rejected;
-
-      await db.addResource({
-        title: 'some title',
-        titleSort: 'some title',
-        rating: -10
-      }).should.be.rejected;
-
-      await db.addResource({
-        title: 'some title',
-        titleSort: 'some title',
-        rating: 300
-      }).should.be.fulfilled;
-    });
-  });
-
-  describe("Object relations", function () {
-    let db: LibraryDatabase;
-
-    beforeEach(async function () {
-      db = new LibraryDatabase(':memory:');
-      await db.create();
-      return fillTestData(db);
+        let res = await db.getResource(TEST_UUID) as Resource;
+        expect(res.uuid).to.be.equal(TEST_UUID);
+        expect(res.publishDate as string).to.be.equal('5th century');
+      });
     });
 
-    it("should create object relations", async function () {
-      let obj: RelatedObject = {
-        uuid: TEST_UUID,
-        role: ObjectRole.Format,
-        tag: 'pdf'
-      };
+    describe("Type checking", function () {
+      let db: LibraryDatabase;
 
-      let relation = await db.addObjectRelation(MIST, obj);
-
-      expect(relation.uuid).to.be.equal(TEST_UUID);
-      expect(relation.role).to.be.equal(ObjectRole.Format);
-      expect(relation.tag).to.be.equal('pdf');
-      expect(relation).to.have.property('rowId');
-
-      let relation2 = await db.relatedObjects(MIST);
-
-      expect(relation2).to.not.be.null;
-      expect(relation2).to.have.lengthOf(1);
-      expect(relation2[0].uuid).to.be.equal(TEST_UUID);
-      expect(relation2[0].role).to.be.equal(ObjectRole.Format);
-      expect(relation2[0].tag).to.be.equal('pdf');
-      expect(relation2[0]).to.have.property('rowId');
-      expect((relation2[0] as any).rowId).to.be.equal((relation as any).rowId);
-    });
-
-    it("should not create duplicated object relations", async function () {
-      await db.addObjectRelation(MIST, {
-        uuid: TEST_UUID,
-        role: ObjectRole.Format,
-        tag: 'pdf'
+      beforeEach(function () {
+        db = new LibraryDatabase(':memory:');
+        return db.create();
       });
 
-      return db.addObjectRelation(MIST, {
-        uuid: TEST_UUID,
-        role: ObjectRole.Format,
-        tag: 'pdf'
-      }).should.be.rejected;
+      it("should not allow setting invalid rating", async function () {
+        await db.addResource({
+          uuid: TEST_UUID,
+          title: 'some title',
+          titleSort: 'some title sort',
+          rating: 530,
+          publishDate: '',
+          publisher: '',
+          desc: ''
+        }).should.be.rejected;
+
+        await db.addResource({
+          title: 'some title',
+          titleSort: 'some title',
+          rating: -10
+        }).should.be.rejected;
+
+        await db.addResource({
+          title: 'some title',
+          titleSort: 'some title',
+          rating: 300
+        }).should.be.fulfilled;
+      });
     });
 
-    it("should update object relations", async function () {
-      let relation = await db.addObjectRelation(MIST, {
-        uuid: TEST_UUID,
-        role: ObjectRole.Format,
-        tag: 'pdf'
+    describe("Object relations", function () {
+      let db: LibraryDatabase;
+
+      beforeEach(async function () {
+        db = new LibraryDatabase(':memory:');
+        await db.create();
+        return fillTestData(db);
       });
 
-      expect(relation.uuid).to.be.equal(TEST_UUID);
+      it("should create object relations", async function () {
+        let obj: RelatedObject = {
+          uuid: TEST_UUID,
+          role: ObjectRole.Format,
+          tag: 'pdf'
+        };
 
-      relation.uuid = TEST_UUID2;
-      await db.updateObjectRelation(relation);
+        let relation = await db.addObjectRelation(MIST, obj);
 
-      let relation3 = await db.relatedObjects(MIST);
-      expect(relation3).to.have.lengthOf(1);
-      expect(relation3[0].uuid).to.be.equal(TEST_UUID2);
-    });
+        expect(relation.uuid).to.be.equal(TEST_UUID);
+        expect(relation.role).to.be.equal(ObjectRole.Format);
+        expect(relation.tag).to.be.equal('pdf');
+        expect(relation).to.have.property('rowId');
 
-    it("should remove object relations", async function () {
-      let rel1 = await db.addObjectRelation(MIST, {
-        uuid: TEST_UUID,
-        role: ObjectRole.Format,
-        tag: 'pdf'
+        let relation2 = await db.relatedObjects(MIST);
+
+        expect(relation2).to.not.be.null;
+        expect(relation2).to.have.lengthOf(1);
+        expect(relation2[0].uuid).to.be.equal(TEST_UUID);
+        expect(relation2[0].role).to.be.equal(ObjectRole.Format);
+        expect(relation2[0].tag).to.be.equal('pdf');
+        expect(relation2[0]).to.have.property('rowId');
+        expect((relation2[0] as any).rowId).to.be.equal((relation as any).rowId);
       });
 
-      let rel2 = await db.addObjectRelation(MIST, {
-        uuid: TEST_UUID2,
-        role: ObjectRole.Format,
-        tag: 'pdf'
+      it("should not create duplicated object relations", async function () {
+        await db.addObjectRelation(MIST, {
+          uuid: TEST_UUID,
+          role: ObjectRole.Format,
+          tag: 'pdf'
+        });
+
+        return db.addObjectRelation(MIST, {
+          uuid: TEST_UUID,
+          role: ObjectRole.Format,
+          tag: 'pdf'
+        }).should.be.rejected;
       });
 
-      expect(await db.relatedObjects(MIST)).to.have.lengthOf(2);
+      it("should update object relations", async function () {
+        let relation = await db.addObjectRelation(MIST, {
+          uuid: TEST_UUID,
+          role: ObjectRole.Format,
+          tag: 'pdf'
+        });
 
-      await db.removeObjectRelation(rel1);
+        expect(relation.uuid).to.be.equal(TEST_UUID);
 
-      expect(await db.relatedObjects(MIST)).to.have.lengthOf(1);
+        relation.uuid = TEST_UUID2;
+        await db.updateObjectRelation(relation);
 
-      await db.removeObjectRelation(rel2);
+        let relation3 = await db.relatedObjects(MIST);
+        expect(relation3).to.have.lengthOf(1);
+        expect(relation3[0].uuid).to.be.equal(TEST_UUID2);
+      });
 
-      expect(await db.relatedObjects(MIST)).to.have.lengthOf(0);
+      it("should remove object relations", async function () {
+        let rel1 = await db.addObjectRelation(MIST, {
+          uuid: TEST_UUID,
+          role: ObjectRole.Format,
+          tag: 'pdf'
+        });
+
+        let rel2 = await db.addObjectRelation(MIST, {
+          uuid: TEST_UUID2,
+          role: ObjectRole.Format,
+          tag: 'pdf'
+        });
+
+        expect(await db.relatedObjects(MIST)).to.have.lengthOf(2);
+
+        await db.removeObjectRelation(rel1);
+
+        expect(await db.relatedObjects(MIST)).to.have.lengthOf(1);
+
+        await db.removeObjectRelation(rel2);
+
+        expect(await db.relatedObjects(MIST)).to.have.lengthOf(0);
+      });
     });
   });
 });

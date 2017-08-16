@@ -1,11 +1,15 @@
 import {should, expect} from 'chai';
+import * as chaiAsPromised from "chai-as-promised";
+import * as chai from 'chai';
 import {
   ast, AstNodeType, createPropsResolver, replaceEscapeSequences, TemplateProcessor, tokenize,
   TokenType
 } from "../../server/formatter";
 import {propercase, romanToNumber} from "../../common/helpers";
+import * as sinon from "sinon";
 
 should();
+chai.use(chaiAsPromised);
 
 describe("formatter", function () {
   describe("tokenize", function () {
@@ -483,64 +487,123 @@ describe("formatter", function () {
       proc = new TemplateProcessor(createPropsResolver(propsObj));
     });
 
-    it("should process plain text", function () {
-      expect(proc.process('just a text')).to.be.equal('just a text');
+    it("should process plain text", async function () {
+      expect(await proc.process('just a text')).to.be.equal('just a text');
     });
 
-    it("should resolve vars", function () {
-      expect(proc.process('{var}')).to.be.equal('some value');
+    it("should resolve vars", async function () {
+      expect(await proc.process('{var}')).to.be.equal('some value');
     });
 
-    it("should process variable names regardless of case", function () {
-      expect(proc.process('{uc_VAR}')).to.be.equal('some value');
+    it("should process variable names regardless of case", async function () {
+      expect(await proc.process('{uc_VAR}')).to.be.equal('some value');
     });
 
-    it("should process variable surrounded with spaces", function () {
-      expect(proc.process('{ var }')).to.be.equal('some value');
+    it("should process variable surrounded with spaces", async function () {
+      expect(await proc.process('{ var }')).to.be.equal('some value');
     });
 
-    it("should apply filters", function () {
-      expect(proc.process('{uc}')).to.be.equal('SOME VALUE');
-      expect(proc.process('{uc|lowercase}')).to.be.equal('some value');
-      expect(proc.process('{ uc | lowercase }')).to.be.equal('some value');
+    it("should apply filters", async function () {
+      expect(await proc.process('{uc}')).to.be.equal('SOME VALUE');
+      expect(await proc.process('{uc|lowercase}')).to.be.equal('some value');
+      expect(await proc.process('{ uc | lowercase }')).to.be.equal('some value');
     });
 
-    it("should resolve non-existent vars to empty strings", function () {
-      expect(proc.process('look: {does_not_exist}')).to.be.equal('look: ');
+    it("should resolve non-existent vars to empty strings", async function () {
+      expect(await proc.process('look: {does_not_exist}')).to.be.equal('look: ');
     });
 
-    it("should throw in strict mode", function () {
+    it("should throw in strict mode", async function () {
       proc.strictVarResolve = true;
-      expect(() => proc.process('look: {does_not_exist}')).to.throw();
+      return expect(proc.process('look: {does_not_exist}')).to.be.rejected;
     });
 
-    it("should handle strings and numbers", function () {
-      expect(proc.process('{"123"}')).to.be.equal('123');
-      expect(proc.process('{123}')).to.be.equal('123');
+    it("should handle strings and numbers", async function () {
+      expect(await proc.process('{"123"}')).to.be.equal('123');
+      expect(await proc.process('{123}')).to.be.equal('123');
     });
 
-    it("lorem function should work", function () {
-      expect(proc.process('{any|_lorem(1)}')).to.be.equal('Lorem');
+    it("lorem function should work", async function () {
+      expect(await proc.process('{any|_lorem(1)}')).to.be.equal('Lorem');
     });
 
-    it("function should be allowed to generate head value", function () {
-      expect(proc.process('{_lorem(2)}')).to.be.equal('Lorem ipsum');
-      expect(proc.process('{_lorem(2)|_lorem(3)}')).to.be.equal('Lorem ipsum dolor');
+    it("function should be allowed to generate head value", async function () {
+      expect(await proc.process('{_lorem(2)}')).to.be.equal('Lorem ipsum');
+      expect(await proc.process('{_lorem(2)|_lorem(3)}')).to.be.equal('Lorem ipsum dolor');
     });
 
-    it("nested calls", function () {
-      expect(proc.process('{ _lorem(add(1, 2)) }')).to.be.equal('Lorem ipsum dolor');
+    it("nested calls", async function () {
+      expect(await proc.process('{ _lorem(add(1, 2)) }')).to.be.equal('Lorem ipsum dolor');
     });
 
-    it("optional blocks", function () {
-      expect(proc.process('{empty|wrap("[@]")}')).to.be.equal('[]');
-      expect(proc.process('{?empty|wrap("[@]")}')).to.be.equal('');
+    it("optional blocks", async function () {
+      expect(await proc.process('{empty|wrap("[@]")}')).to.be.equal('[]');
+      expect(await proc.process('{?empty|wrap("[@]")}')).to.be.equal('');
     });
 
-    it("specifiers", function () {
-      expect(proc.process('{obj#prop}')).to.be.equal('prop value');
-      expect(proc.process('{arr#1}')).to.be.equal('second');
-      expect(proc.process('{arr#4}')).to.be.equal('');
+    it("specifiers", async function () {
+      expect(await proc.process('{obj#prop}')).to.be.equal('prop value');
+      expect(await proc.process('{arr#1}')).to.be.equal('second');
+      expect(await proc.process('{arr#4}')).to.be.equal('');
+    });
+
+    it("should create lists", async function () {
+      expect(await proc.process('{list(1, 2, 3, 4)}')).to.be.equal('1, 2, 3, 4');
+    });
+
+    it("should format lists", async function () {
+      expect(await proc.process('{list(1, 2, 3)|join(" & ")}')).to.be.equal('1 & 2 & 3');
+    });
+
+    it("should create dates", async function () {
+      let clock = sinon.useFakeTimers();
+      clock.tick(10000);
+
+      try {
+        expect(await proc.process('{now|utc}')).to.be.equal('January 1st 1970, 00:00');
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("should format dates", async function () {
+      let clock = sinon.useFakeTimers();
+      clock.tick(10000);
+
+      try {
+        expect(await proc.process('{now|format_date("D MMM YYYY")}')).to.be.equal('1 Jan 1970');
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("should format dates with utc", async function () {
+      let clock = sinon.useFakeTimers();
+      clock.tick(10000);
+
+      try {
+        expect(await proc.process('{now|utc|format_date("D MMM YYYY")}')).to.be.equal('1 Jan 1970');
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("should format dates from function", async function () {
+      let clock = sinon.useFakeTimers();
+      clock.tick(10000);
+
+      try {
+        expect(await proc.process('{format_date(now, "D MMM YYYY")}')).to.be.equal('1 Jan 1970');
+      } finally {
+        clock.restore();
+      }
+    });
+
+    it("should throw an error when formatting a non-date var", async function () {
+      return Promise.all([,
+          expect(proc.process("{'string'|format_date('D MMM YYYY')}")).to.be.rejected,
+          expect(proc.process("{123|format_date('D MMM YYYY')}")).to.be.rejected
+      ]);
     });
   });
 

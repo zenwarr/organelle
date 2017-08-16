@@ -165,16 +165,12 @@
  * ```
  */
 
-import {strictParseInt} from "../common/helpers";
+import {propercase, strictParseInt, strictParseFloat} from "../common/helpers";
+import * as moment from 'moment';
+import * as numeral from 'numeral';
 
-export type VarResolver = (name: string, specifier: string|null) => string|null;
-export type FuncResolver = (value: string|null, ...args: any[]) => string|null;
-
-interface FuncResolverData {
-  resolver: FuncResolver;
-  minArgCount: number;
-  doc: string;
-}
+export type VarResolver = (name: string, specifier: string|null) => any|Promise<any>;
+export type FuncResolver = (value: any, ...args: any[]) => any|Promise<any>;
 
 function resolveFromObjectCached(obj: any, cachedKeys: string[], cachedLcKeys: string[], name: string,
                                  specifier: string|null): string|null {
@@ -203,20 +199,32 @@ export function createPropsResolver(obj: any): VarResolver {
   return resolveFromObjectCached.bind(null, obj, keys, keys.map(key => key.toLowerCase()));
 }
 
+export function defFormat(value: any, customJoin: string = ', '): string {
+  if (typeof value === 'string') {
+    return value;
+  } else if (Array.isArray(value)) {
+    return value.map(x => defFormat(x, customJoin)).join(customJoin);
+  } else if (value instanceof Date) {
+    return moment(value).format('MMMM Do YYYY, HH:mm');
+  } else {
+    return '' + value;
+  }
+}
+
 const LOREM: string[] = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum'.split(' ');
 
 const DEFAULT_FUNCTIONS: { [name: string]: FuncResolver } = {
-  lowercase: (input, altInput: string) => {
-    return polymArgCheck(input, altInput).toLowerCase();
+  lowercase: (input: any, altInput: any): string => {
+    return polymArgCheck(defFormat(input), defFormat(altInput)).toLowerCase();
   },
-  uppercase: (input, altInput: string) => {
-    return polymArgCheck(input, altInput).toUpperCase();
+  uppercase: (input: any, altInput: any): string => {
+    return polymArgCheck(defFormat(input), defFormat(altInput)).toUpperCase();
   },
-  trim: (input, altInput: string) => {
-    return polymArgCheck(input, altInput).trim();
+  trim: (input: any, altInput: any): string => {
+    return polymArgCheck(defFormat(input), defFormat(altInput)).trim();
   },
-  def: (input: string|null, defValue: string): string => {
-    if (input == null || input == '') {
+  def: (input: any, defValue: any): any => {
+    if (input == null || input === '') {
       if (defValue == null) {
         throw new FunctionArgumentsError();
       }
@@ -224,50 +232,50 @@ const DEFAULT_FUNCTIONS: { [name: string]: FuncResolver } = {
     }
     return input;
   },
-  titlecase: (input, altInput: string) => {
-    // let input = polymArgsCheck(input, altInput);
-    // return titlecase(input);
-    throw new Error("Method not implemented");
+  propercase: (input: any, altInput: any): string => {
+    return propercase(polymArgCheck(defFormat(input), defFormat(altInput)));
   },
-  add: (input: string|null, ...args: any[]): string => {
+  add: (input: any, ...args: any[]): number => {
     let [arg1, arg2] = polymArgsCheck(2, input, ...args);
-    let a = strictParseInt(arg1);
+    let a = strictParseInt(defFormat(arg1));
     if (a == null) {
       throw new FunctionArgumentsError('First argument is invalid: should be a number');
     }
-    let b = strictParseInt(arg2);
+    let b = strictParseInt(defFormat(arg2));
     if (b == null) {
       throw new FunctionArgumentsError('Second argument is invalid: should be a number');
     }
 
-    return '' + (a + b);
+    return a + b;
   },
-  sub: (input: string|null, ...args: any[]): string => {
+  sub: (input: any, ...args: any[]): number => {
     let [arg1, arg2] = polymArgsCheck(2, input, ...args);
-    let a = strictParseInt(arg1);
+    let a = strictParseInt(defFormat(arg1));
     if (a == null) {
       throw new FunctionArgumentsError('First argument is invalid: should be a number');
     }
-    let b = strictParseInt(arg2);
+    let b = strictParseInt(defFormat(arg2));
     if (b == null) {
       throw new FunctionArgumentsError('Second argument is invalid: should be a number');
     }
 
-    return '' + (a - b);
+    return a - b;
   },
-  wrap: (input: string|null, ...args: any[]): string => {
+  wrap: (input: any, ...args: any[]): string => {
     let [text, format] = polymArgsCheck(2, input, args);
+    text = defFormat(text);
+    format = defFormat(format);
     if (format.indexOf('@') < 0) {
       throw new FunctionArgumentsError('You must provide a format string where @ denotes the position of text to wrap');
     }
     return format.replace('@', text);
   },
-  _lorem: (input: string|null, arg: string): string => {
+  _lorem: (input: any, arg: any): string => {
     // this function ignores filter input
     if (arg == null) {
       throw new FunctionArgumentsError('Invalid number of arguments: one argument expected');
     }
-    let wordCount = strictParseInt(arg);
+    let wordCount = strictParseInt(defFormat(arg));
     if (wordCount == null) {
       throw new FunctionArgumentsError('First argument is invalid: should be a number');
     }
@@ -277,6 +285,44 @@ const DEFAULT_FUNCTIONS: { [name: string]: FuncResolver } = {
     }
 
     return LOREM.slice(0, wordCount).join(' ');
+  },
+  list: (input: any, ...args: any[]): any => {
+    return [...args];
+  },
+  join: (input: any, ...args: any[]): string => {
+    let [arr, join] = polymArgsCheck(2, input, ...args);
+    if (!Array.isArray(arr)) {
+      throw new Error('First argment is invalid: should be an array');
+    }
+    return defFormat(arr, defFormat(join));
+  },
+  now: (): Date => {
+    return new Date();
+  },
+  utc: (input: any, arg: any): Date => {
+    let date: any = polymArgCheck(input, arg);
+    if (date instanceof Date) {
+      return new Date(date.getTime() + date.getTimezoneOffset() * 60000);
+    } else {
+      throw new Error('First argument is invalid: should be a date');
+    }
+  },
+  format_date: (input: any, ...args: any[]): string => {
+    let [date, format] = polymArgsCheck(2, input, ...args);
+    if (date instanceof Date) {
+      format = defFormat(format);
+      return moment(date).format(format);
+    } else {
+      throw new Error('First argument is invalid: should be a date');
+    }
+  },
+  format_num: (input: any, ...args: any[]): string => {
+    let [num, format] = polymArgsCheck(2, input, ...args);
+    num = strictParseFloat(num);
+    if (num == null) {
+      throw new Error('First argument is invalid: should be a number or a floating-point number');
+    }
+    return numeral(num).format(defFormat(format));
   }
 };
 
@@ -286,11 +332,11 @@ class FunctionArgumentsError extends Error {
   }
 }
 
-function polymArg(input: string|null, arg: string|null): string|null {
+function polymArg(input: any, arg: any): any {
   return input == null ? arg : input;
 }
 
-function polymArgCheck(input: string|null, arg: string|null): string {
+function polymArgCheck(input: any, arg: any): any {
   if (input == null) {
     if (arg == null) {
       throw new FunctionArgumentsError();
@@ -301,26 +347,26 @@ function polymArgCheck(input: string|null, arg: string|null): string {
   }
 }
 
-function* polymArgs(count: number, input: string|null, ...args: any[]): IterableIterator<string> {
+function* polymArgs(count: number, input: any, ...args: any[]): IterableIterator<any> {
   if (input == null) {
     for (let j = 0; j < count; ++j) {
-      yield '' + args[j];
+      yield args[j];
     }
   } else {
     yield input;
     for (let j = 0; j < count - 1; ++j) {
-      yield '' + args[j];
+      yield args[j];
     }
   }
 }
 
-function* polymArgsCheck(count: number, input: string|null, ...args: any[]): IterableIterator<string> {
+function* polymArgsCheck(count: number, input: any, ...args: any[]): IterableIterator<any> {
   if (input == null) {
     for (let j = 0; j < count; ++j) {
       if (args[j] == null) {
         throw new FunctionArgumentsError(`Invalid number of arguments: ${count} expected`);
       }
-      yield '' + args[j];
+      yield args[j];
     }
   } else {
     yield input;
@@ -328,7 +374,7 @@ function* polymArgsCheck(count: number, input: string|null, ...args: any[]): Ite
       if (args[j] == null) {
         throw new FunctionArgumentsError(`Invalid number of arguments: ${count} expected (and first one is filter's input value)`);
       }
-      yield '' + args[j];
+      yield args[j];
     }
   }
 }
@@ -360,7 +406,7 @@ export class TemplateProcessor {
     this._funcResolvers[name] = resolver;
   }
 
-  process(input: string): string {
+  async process(input: string): Promise<string> {
     let nodes = (new AstCreator(tokenize(input))).create();
     if (nodes.length === 0) {
       return '';
@@ -378,10 +424,10 @@ export class TemplateProcessor {
         if (node.children == null || node.children.length === 0) {
           this._badAst();
         } else {
-          let curValue: string|null = null;
+          let curValue: any = null;
           for (let j = 0; j < node.children.length; ++j) {
             let childNode = node.children[j];
-            curValue = this._resolveExpr(curValue, childNode);
+            curValue = await this._resolveExpr(curValue, childNode);
             if (j === 0 && blockNode.optional) {
               curValue = '';
               break;
@@ -389,6 +435,8 @@ export class TemplateProcessor {
           }
           if (curValue == null) {
             curValue = '';
+          } else {
+            curValue = defFormat(curValue);
           }
           parts.push(curValue);
         }
@@ -398,7 +446,7 @@ export class TemplateProcessor {
     return parts.join('');
   }
 
-  resolveVar(name: string): string|null {
+  async resolveVar(name: string): Promise<any> {
     name = name.toLowerCase().trim();
 
     let realName: string, specifier: string|null;
@@ -421,7 +469,7 @@ export class TemplateProcessor {
     return null;
   }
 
-  resolveFunc(name: string, input: string|null, ...args: any[]): string|null {
+  async resolveFunc(name: string, input: any, ...args: any[]): Promise<any> {
     let resolver = this.getFuncResolver(name);
     try {
       return resolver == null ? null : resolver(input, ...args);
@@ -455,7 +503,7 @@ export class TemplateProcessor {
     }
   }
 
-  protected _resolveExpr(curValue: string|null, node: AstNode): string|null {
+  protected async _resolveExpr(curValue: any, node: AstNode): Promise<any> {
     if (node == null) {
       throw new Error('Failed to resolve template: invalid ast tree');
     }
@@ -472,7 +520,7 @@ export class TemplateProcessor {
       let argList: (string|null)[] = [];
       if (node.children != null && node.children.length > 0) {
         for (let j = 0; j < node.children.length; ++j) {
-          argList.push(this._resolveExpr(null, node.children[j]));
+          argList.push(await this._resolveExpr(null, node.children[j]));
         }
       }
 
@@ -486,9 +534,9 @@ export class TemplateProcessor {
     } else if (node.type === AstNodeType.FunctionOrVariable) {
       // it can be either a variable or a function. In either case, it has no arguments.
       // try variables first
-      let curValue = this.resolveVar(node.value);
+      let curValue = await this.resolveVar(node.value);
       if (curValue == null) {
-        curValue = this.resolveFunc(node.value, null);
+        curValue = await this.resolveFunc(node.value, null);
       }
       if (curValue == null && this.strictVarResolve) {
         throw new Error(`Cannot resolve variable named "${node.value}" (strict mode set)`);

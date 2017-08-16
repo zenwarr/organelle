@@ -1,5 +1,6 @@
 import {Database, DatabaseWithOptions} from './db';
 import * as uuid from 'uuid';
+import {WhereClauseBuilder} from "./library-db";
 
 export const CUR_STORAGE_VERSION = 1;
 
@@ -104,20 +105,17 @@ export class StorageDatabase extends DatabaseWithOptions {
   /**
    * Removes registered object with given UUID from the database. If no object with given UUID exists, the function
    * will fail.
-   * @param {string} uuid UUID of the object to remove.
+   * @param {string} obj UUID of the object to remove.
    * @returns {Promise<void>}
    */
-  async unregisterObject(uuid: string): Promise<void> {
-    if (uuid == null || uuid.length === 0) {
-      throw new Error('Empty object UUID');
-    }
+  async unregisterObject(obj: StorageObject|string): Promise<void> {
+    let where = new WhereClauseBuilder();
+    where.add('uuid', Database.getId(obj));
 
-    let stmt = await this.db.run('DELETE FROM objects WHERE uuid = $uuid', {
-      $uuid: uuid
-    });
+    let stmt = await this.db.run(`DELETE FROM objects WHERE ${where.clause}`, where.bound);
 
     if (stmt.changes === 0) {
-      throw new Error(`Cannot remove object with UUID = ${uuid}. Object does not exist`);
+      throw new Error(`Cannot remove object with UUID = ${obj}. Object does not exist`);
     }
   }
 

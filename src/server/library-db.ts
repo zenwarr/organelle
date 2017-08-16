@@ -138,10 +138,11 @@ export interface Group {
   groupType?: GroupType;
 }
 
-export interface NewGroup extends Group {
+export interface NewGroup {
+  uuid?: string|null;
   title: string;
   titleSort: string;
-  groupType: GroupType;
+  groupType: GroupType|string;
 }
 
 export interface UpdateGroup extends Group {
@@ -321,18 +322,18 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   /**
    * Removes group type from the library. If no type with given UUID exists, the function will fail.
-   * @param {string} uuid UUID of the GroupType object to remove
+   * @param {string} groupType UUID of the GroupType object to remove
    * @returns {Promise<void>}
    */
-  async removeGroupType(uuid: string) : Promise<void> {
-    uuid = Database._validateId(uuid);
+  async removeGroupType(groupType: GroupType|string) : Promise<void> {
+    groupType = Database.getId(groupType);
 
-    let typeIndex = this._groupTypes.findIndex(x => x.uuid === uuid);
+    let typeIndex = this._groupTypes.findIndex(x => x.uuid === groupType);
     if (typeIndex < 0) {
       throw new Error('Cannot remove group type: type does not exist');
     }
 
-    await this._removeEntry(uuid, GroupTypeSpec);
+    await this._removeEntry(groupType, GroupTypeSpec);
 
     this._groupTypes.splice(typeIndex, 1);
   }
@@ -390,11 +391,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   /**
    * Remove resource from the library. If no resource with given UUID exists, the function will fail.
-   * @param {string} uuid UUID of the resource to remove
+   * @param {string} resource UUID of the resource to remove
    * @returns {Promise<void>}
    */
-  removeResource(uuid: string): Promise<void> {
-    return this._removeEntry(uuid, ResourceSpec);
+  removeResource(resource: Resource|string): Promise<void> {
+    return this._removeEntry(Database.getId(resource), ResourceSpec);
   }
 
   /**
@@ -427,11 +428,24 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   /**
    * Remove person from the library. If no perosn with given UUID exists, the function will fail.
-   * @param {string} uuid UUID of the person to remove
+   * @param {string} person UUID of the person to remove
    * @returns {Promise<void>}
    */
-  removePerson(uuid: string): Promise<void> {
-    return this._removeEntry(uuid, PersonSpec);
+  removePerson(person: Person|string): Promise<void> {
+    return this._removeEntry(Database.getId(person), PersonSpec);
+  }
+
+  async findPersons(name: string): Promise<Person[]> {
+    let where = new WhereClauseBuilder();
+    where.add('name', name);
+
+    let rows = await this.db.all(`SELECT * FROM persons WHERE ${where.clause}`, where.bound);
+    return rows.map((row: any) => PersonSpec.rowToEntry(row));
+  }
+
+  async findPerson(name: string): Promise<Person|null> {
+    let persons = await this.findPersons(name);
+    return persons.length > 0 ? persons[0] : null;
   }
 
   /**
@@ -449,8 +463,69 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {Resource} group Group object containing properties of the new group.
    * @returns {Promise<Group>} Group object that has been added.
    */
-  addGroup(group: NewGroup): Promise<Group> {
-    return this._addEntry(group, this._groupSpec);
+  async addGroup(group: NewGroup): Promise<Group> {
+    return await this._addEntry<NewGroup>(group, this._groupSpec) as Group;
+  }
+
+  async addTag(text: string, textSort?: string): Promise<Group> {
+    return this.addGroup({
+      title: text,
+      titleSort: textSort ? textSort : text,
+      groupType: KnownGroupTypes.Tag
+    });
+  }
+
+  async addCategory(text: string, textSort?: string): Promise<Group> {
+    return this.addGroup({
+      title: text,
+      titleSort: textSort ? textSort : text,
+      groupType: KnownGroupTypes.Category
+    });
+  }
+
+  async addLang(code: string): Promise<Group> {
+    return this.addGroup({
+      title: code.toLowerCase(),
+      titleSort: code.toLowerCase(),
+      groupType: KnownGroupTypes.Language
+    });
+  }
+
+  async addSeries(title: string, titleSort?: string): Promise<Group> {
+    return this.addGroup({
+      title: title,
+      titleSort: titleSort ? titleSort : title,
+      groupType: KnownGroupTypes.Series
+    });
+  }
+
+  async tag(text: string): Promise<Group> {
+    return await this.findGroup(text, KnownGroupTypes.Tag) || await this.addTag(text);
+  }
+
+  async lang(code: string): Promise<Group> {
+    return await this.findGroup(code.toLowerCase(), KnownGroupTypes.Language) || await this.addLang(code);
+  }
+
+  async category(text: string): Promise<Group> {
+    return await this.findGroup(text, KnownGroupTypes.Category) || await this.addCategory(text);
+  }
+
+  async series(text: string): Promise<Group> {
+    return await this.findGroup(text, KnownGroupTypes.Series) || await this.addSeries(text);
+  }
+
+  async findGroup(text: string, groupType: GroupType|string): Promise<Group|null> {
+    let where = new WhereClauseBuilder();
+    where.add('title', text);
+
+    let result = await this.findGroupsWhere(where);
+    return result.length > 0 ? result[0] : null;
+  }
+
+  async findGroupsWhere(where: WhereClauseBuilder): Promise<Group[]> {
+    let rows = await this.db.all(`SELECT * FROM groups WHERE ${where.clause}`, where.bound);
+    return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
   }
 
   /**
@@ -464,11 +539,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   /**
    * Remove group from the library. If no group with given UUID exists, the function will fail.
-   * @param {string} uuid UUID of the group to remove
+   * @param {string} group UUID of the group to remove
    * @returns {Promise<void>}
    */
-  removeGroup(uuid: string): Promise<void> {
-    return this._removeEntry(uuid, this._groupSpec);
+  removeGroup(group: Group|string): Promise<void> {
+    return this._removeEntry(Database.getId(group), this._groupSpec);
   }
 
   /**
@@ -478,9 +553,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {PersonRelation} relation Type of relation to create
    * @returns {Promise<void>}
    */
-  async addPersonRelation(resource: string, person: string, relation: PersonRelation): Promise<void> {
-    resource = Database._validateId(resource);
-    person = Database._validateId(person);
+  async addPersonRelation(resource: Resource|string, person: Person|string, relation: PersonRelation): Promise<void> {
+    resource = Database._validateId(Database.getId(resource));
+    person = Database._validateId(Database.getId(person));
 
     await this.db.run("INSERT INTO res_to_persons(res_id, person_id, relation) VALUES(?, ?, ?)",
         [ resource, person, PersonRelationSpec.prop('relation').toDb(relation) ]);
@@ -496,13 +571,13 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * removed regardless of the relation type.
    * @returns {Promise<void>}
    */
-  async removePersonRelations(resource: string, person?: string, relation?: PersonRelation): Promise<void> {
+  async removePersonRelations(resource: Resource|string, person?: Person|string, relation?: PersonRelation): Promise<void> {
     let whereClause = new WhereClauseBuilder();
 
-    whereClause.add('res_id', Database._validateId(resource));
+    whereClause.add('res_id', Database.getId(resource));
 
     if (person != null) {
-      whereClause.add('person_id', Database._validateId(person));
+      whereClause.add('person_id', Database.getId(person));
     }
 
     if (relation != null) {
@@ -519,10 +594,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * will be returned.
    * @returns {Promise<RelatedPerson[]>} List of relations between persons and this resource.
    */
-  async relatedPersons(resource: string, relation?: PersonRelation): Promise<RelatedPerson[]> {
+  async relatedPersons(resource: Resource|string, relation?: PersonRelation): Promise<RelatedPerson[]> {
     let whereClause = new WhereClauseBuilder();
 
-    whereClause.add('res_id', Database._validateId(resource));
+    whereClause.add('res_id', Database.getId(resource));
     if (relation != null) {
       whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
     }
@@ -550,9 +625,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * is not ordered, the function will fail.
    * @returns {Promise<RelatedGroup>} Relation that has been created
    */
-  async addGroupRelation(resource: string, groupUuid: string, groupIndex?: number): Promise<RelatedGroup> {
-    resource = Database._validateId(resource);
-    groupUuid = Database._validateId(groupUuid);
+  async addGroupRelation(resource: Resource|string, groupUuid: Group|string,
+                         groupIndex?: number): Promise<RelatedGroup> {
+    resource = Database.getId(resource);
+    groupUuid = Database.getId(groupUuid);
 
     let group = await this.getGroup(groupUuid);
     if (group == null) {
@@ -584,6 +660,19 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return relGroup;
   }
 
+  async addTagToResource(resource: Resource|string, tagText: string): Promise<RelatedGroup> {
+    return this.addGroupRelation(resource, await this.tag(tagText));
+  }
+
+  async addLangToResource(resource: Resource|string, langCode: string): Promise<RelatedGroup> {
+    return this.addGroupRelation(resource, await this.lang(langCode));
+  }
+
+  async addSeriesToResource(resource: Resource|string, seriesName: string,
+                            seriesIndex: number): Promise<RelatedGroup> {
+    return this.addGroupRelation(resource, await this.series(seriesName), seriesIndex);
+  }
+
   /**
    * Removes existing relation (or relations) between a resource and a group. If no relations exist, the function
    * will do nothing. Call it with the only first argument to remove all group relations for a resource.
@@ -594,13 +683,19 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * going to be removed.
    * @returns {Promise<void>}
    */
-  async removeGroupRelations(resource: string, group?: string, groupType?: GroupType): Promise<void> {
+  async removeGroupRelations(resource: Resource|string, group?: Group|string,
+                             groupType?: GroupType|string): Promise<void> {
     let whereClause = new WhereClauseBuilder();
 
-    whereClause.add('res_id', Database._validateId(resource));
+    whereClause.add('res_id', Database.getId(resource));
     if (group != null) {
-      whereClause.add('group_id', Database._validateId(group));
+      whereClause.add('group_id', Database.getId(group));
     }
+
+    if (typeof groupType === 'string') {
+      groupType = this.getGroupType(groupType) as (GroupType|undefined);
+    }
+
     if (groupType != null) {
       whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
@@ -615,10 +710,18 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * If not specified, all relations regardless of type will be returned.
    * @returns {Promise<RelatedGroup[]>}
    */
-  async relatedGroups(resource: string, groupType?: GroupType): Promise<RelatedGroup[]> {
+  async relatedGroups(resource: Resource|string, groupType?: GroupType|string): Promise<RelatedGroup[]> {
     let whereClause = new WhereClauseBuilder();
 
-    whereClause.add('res_id', Database._validateId(resource));
+    whereClause.add('res_id', Database.getId(resource));
+
+    if (typeof groupType === 'string') {
+      let fetchedGroupType = this.getGroupType(groupType) as (GroupType|undefined);
+      if (!groupType) {
+        throw new Error(`No group type with UUID [${groupType}] exist`);
+      }
+      groupType = fetchedGroupType;
+    }
 
     if (groupType != null) {
       whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
@@ -639,10 +742,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return results;
   }
 
-  async relatedObjects(resource: string, role?: ObjectRole, tag?: string): Promise<RelatedObject[]> {
+  async relatedObjects(resource: Resource|string, role?: ObjectRole, tag?: string): Promise<RelatedObject[]> {
     let whereClause = new WhereClauseBuilder();
 
-    whereClause.add('res_id', Database._validateId(resource));
+    whereClause.add('res_id', Database.getId(resource));
     if (role != null) {
       whereClause.add('role', ObjectSpec.prop('role').toDb(role));
     }
@@ -656,8 +759,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return rows.map(row => ObjectSpec.rowToEntry<RelatedObject>(row));
   }
 
-  async addObjectRelation(resource: string, obj: RelatedObject): Promise<RelatedObject> {
-    resource = Database._validateId(resource);
+  async addObjectRelation(resource: Resource|string, obj: RelatedObject): Promise<RelatedObject> {
+    resource = Database.getId(resource);
     let objectUuid = Database._validateId(obj.uuid);
 
     let result = await this.db.run(`INSERT INTO objects(uuid, res_id, role, tag) VALUES(?, ?, ?, ?)`,
@@ -966,12 +1069,12 @@ class PublishDateSpec extends GenericFieldSpec {
 class GroupTypeFieldSpec extends GenericFieldSpec {
   constructor(prop: string, column: string, protected _db: LibraryDatabase) {
     super(prop, column,
-        (value: any): boolean => (value != null && value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0),
+        (value: any): boolean => (value != null && (typeof value === 'string' || (value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0))),
         (value: any): boolean => (typeof value === 'string' && value.length > 0));
   }
 
   toDb(value: any): any {
-    return value.uuid;
+    return (typeof value === 'string') ? value : value.uuid;
   }
 
   fromDb(value: any): any {
@@ -1064,7 +1167,7 @@ abstract class ClauseBuilder {
   abstract get bound(): any[];
 }
 
-class WhereClauseBuilder extends ClauseBuilder {
+export class WhereClauseBuilder extends ClauseBuilder {
   add(column: string, value: any): void {
     this.addRaw(column + ' = ?', value);
   }

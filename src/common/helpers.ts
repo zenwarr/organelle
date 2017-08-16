@@ -1,17 +1,43 @@
-const CHAR_0 = '0'.charCodeAt(0), CHAR_9 = '9'.charCodeAt(0);
+const INTEGER_FIRST_CHARS = '0123456789+-'.split('').map(x => x.charCodeAt(0));
+const INTEGER_CHARS = '0123456789'.split('').map(x => x.charCodeAt(0));
+const FLOAT_FIRST_CHARS = '0123456789+-.eE'.split('').map(x => x.charCodeAt(0));
 
-export function strictParseInt(input: any, base: number = 10): number|null {
-  if (typeof input != 'string') {
+export function strictParseInt(input: any): number|null {
+  if (typeof input !== 'string') {
     input = '' + input;
   }
   let firstCh = input.charCodeAt(0);
-  if (!(firstCh >= CHAR_0 && firstCh <= CHAR_9)) {
+  if (INTEGER_FIRST_CHARS.indexOf(firstCh) < 0) {
     return null;
   }
+
+  if (input.slice(1).split('').some((d: string) => INTEGER_CHARS.indexOf(d.charCodeAt(0)) < 0)) {
+    return null;
+  }
+
   if (!isFinite(input)) {
     return null;
   }
-  let result = parseInt(input, base);
+
+  let result = parseInt(input, 10);
+  return isNaN(result) ? null : result;
+}
+
+export function strictParseFloat(input: any): number|null {
+  if (typeof input !== 'string') {
+    input = '' + input;
+  }
+
+  let firstCh = input.charCodeAt(0);
+  if (FLOAT_FIRST_CHARS.indexOf(firstCh) < 0) {
+    return null;
+  }
+
+  if (!isFinite(input)) {
+    return null;
+  }
+
+  let result = parseFloat(input);
   return isNaN(result) ? null : result;
 }
 

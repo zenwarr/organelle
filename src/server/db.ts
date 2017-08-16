@@ -2,11 +2,11 @@ import * as sqlite from 'sqlite';
 import * as sqlite3 from 'sqlite3';
 import * as path from 'path';
 import * as uuid from 'uuid';
+import * as fs from 'fs-extra';
+
+export type Savepoint = string;
 
 export class Database {
-  protected _filename: string;
-  protected _db:sqlite.Database;
-
   constructor(filename: string) {
     this._filename = path.normalize(filename);
   }
@@ -38,13 +38,39 @@ export class Database {
     await this._tuneConnection();
   }
 
+  async createOrOpen(): Promise<void> {
+    try {
+      await this.open();
+    } catch (err) {
+      if (err.code === 'SQLITE_CANTOPEN') {
+        // try to create a new database...
+        await this.create();
+      } else {
+        throw err;
+      }
+    }
+  }
+
   /**
    * Sqlite database object
    * @returns {sqlite.Database}
    */
   get db(): sqlite.Database { return this._db; }
 
+  static getId(something: string|{ uuid?: string|null }): string {
+    if (typeof something === 'string') {
+      return something;
+    } else if (something.uuid) {
+      return something.uuid;
+    } else {
+      throw new Error('UUID is invalid or empty');
+    }
+  }
+
   /** Protected area **/
+
+  protected _filename: string;
+  protected _db:sqlite.Database;
 
   protected _ensureNotInited() {
     if (this._db != null) {
@@ -134,6 +160,20 @@ export class DatabaseWithOptions extends Database {
    */
   get uuid(): string|null { return this.getOption('uuid'); }
 
+  async begin(): Promise<Savepoint> {
+    let svp = this._generateSavepoint();
+    await this._db.run(`SAVEPOINT ${svp}`);
+    return svp;
+  }
+
+  async commit(svp: Savepoint): Promise<void> {
+    await this._db.run(`RELEASE ${svp}`)
+  }
+
+  async rollback(svp: Savepoint): Promise<void> {
+    await this._db.run(`ROLLBACK TO ${svp}`);
+  }
+
   /** Protected area **/
 
   protected _config: { [name: string] : string; } = {};
@@ -163,5 +203,9 @@ export class DatabaseWithOptions extends Database {
     configData.map(item => {
       this._config[item.name.toLowerCase()] = item.value;
     });
+  }
+
+  protected _generateSavepoint(): string {
+    return 'sv' + (new Date()).getTime();
   }
 }

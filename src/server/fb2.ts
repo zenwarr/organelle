@@ -110,7 +110,7 @@ export class FB2MetadataParser extends MetadataParser {
 
       let keywordNode = titleInfo.get('fb2:keywords', FB2_NS);
       if (keywordNode != null) {
-        metadata.tags = keywordNode.text().split(/[\s,;]/);
+        metadata.tags = keywordNode.text().split(/[,;]/);
       }
 
       metadata.langs = [];
