@@ -596,6 +596,8 @@ const CHAR_GT = '>'.charCodeAt(0);
 const CHAR_SINGLE_QUOTE = '\''.charCodeAt(0);
 const CHAR_DOUBLE_QUOTE = '"'.charCodeAt(0);
 const CHAR_BACKSLASH = '\\'.charCodeAt(0);
+const CHAR_PLUS = '+'.charCodeAt(0);
+const CHAR_MINUS = '-'.charCodeAt(0);
 const WHITESPACE_CODES: number[] = ' \t\n\r\v\f\u00A0\u2028\u2029'.split('').map(x => x.charCodeAt(0));
 
 function isWhitespaceCode(ch: number): boolean {
@@ -769,7 +771,10 @@ export function tokenize(input: string): Token[] {
 
         ch = nextChar();
         eat();
-      } else if (isDigitCode(ch)) {
+      } else if (isDigitCode(ch) || ch === CHAR_PLUS || ch === CHAR_MINUS) {
+        let firstChar = ch;
+        let startsWithSign = (ch === CHAR_PLUS || ch === CHAR_MINUS);
+
         do {
           ch = nextChar();
         } while (ch != null && isDigitCode(ch));
@@ -777,6 +782,10 @@ export function tokenize(input: string): Token[] {
         if (ch != null && (isAlphaCode(ch) || isNameCode(ch))) {
           // this is not a number, this is an incorrect identifier!!!
           throw new Error(`Identifier cannot start with a number: ${input.slice(tail, head + 1)}`);
+        }
+
+        if (startsWithSign && head - tail <= 1) {
+          throw new Error(`Unexpected char: ${String.fromCharCode(firstChar)}`);
         }
 
         pushToken(TokenType.Number, 1);

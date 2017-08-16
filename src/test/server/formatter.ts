@@ -270,6 +270,31 @@ describe("formatter", function () {
         begin: 1
       });
     });
+
+    it("should accept negative integers", function () {
+      let tokens = tokenize('{-20}');
+      expect(tokens).to.have.lengthOf(3);
+      expect(tokens[1]).to.be.deep.equal({
+        type: TokenType.Number,
+        value: '-20',
+        begin: 1
+      });
+    });
+
+    it("should accept positive integers with plus sign", function () {
+      let tokens = tokenize('{+20}');
+      expect(tokens).to.have.lengthOf(3);
+      expect(tokens[1]).to.be.deep.equal({
+        type: TokenType.Number,
+        value: '+20',
+        begin: 1
+      });
+    });
+
+    it("should not accept a single plus or minus", function () {
+      expect(() => tokenize('{+}')).to.throw();
+      expect(() => tokenize('{-}')).to.throw();
+    });
   });
 
   describe("ast", function () {
@@ -604,6 +629,14 @@ describe("formatter", function () {
           expect(proc.process("{'string'|format_date('D MMM YYYY')}")).to.be.rejected,
           expect(proc.process("{123|format_date('D MMM YYYY')}")).to.be.rejected
       ]);
+    });
+
+    it("should process negative integers", async function () {
+      return proc.process('{-20}').should.eventually.be.equal('-20');
+    });
+
+    it("should process negative integers as arguments", async function () {
+      return proc.process('{add(10, -5)}').should.eventually.be.equal('5');
     });
   });
 
