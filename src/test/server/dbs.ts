@@ -799,6 +799,25 @@ describe('dbs', function() {
         expect(await db.relatedObjects(MIST)).to.have.lengthOf(0);
       });
     });
+
+    describe("Group relations", function () {
+      let db: LibraryDatabase;
+
+      beforeEach(async function () {
+        db = new LibraryDatabase(':memory:');
+        await db.create();
+        return fillTestData(db);
+      });
+
+      it("should create relation tag", async function () {
+        let relatedGroup = await db.addGroupRelation(MIST, TAG1, undefined, 'extra info');
+        expect(relatedGroup.relationTag).to.be.equal('extra info');
+
+        let rels = await db.relatedGroups(MIST, KnownGroupTypes.Tag);
+        expect(rels).to.have.lengthOf(1);
+        expect(rels[0]).to.have.property('relationTag', 'extra info');
+      });
+    });
   });
 });
 

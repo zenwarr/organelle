@@ -157,6 +157,12 @@ export interface RelatedGroup extends Group {
    * Group index should be always positive or null. Any negative value will be ignored.
    */
   groupIndex: number|null;
+
+  /**
+   * Relation tag contains extra information on a relation between a resource and a group.
+   * The exact meaning of the relation tag depends on group type.
+   */
+  relationTag: any;
 }
 
 /**
@@ -265,7 +271,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
         `CREATE TABLE groups(uuid TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, title_sort TEXT NOT NULL,
               FOREIGN KEY(type) REFERENCES group_types(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
         `CREATE TABLE res_to_groups(res_id TEXT NOT NULL, group_id TEXT NOT NULL, group_index INTEGER NOT NULL,
-              UNIQUE(res_id, group_id, group_index),
+              relation_tag TEXT NOT NULL DEFAULT '',
+              UNIQUE(res_id, group_id, group_index, relation_tag),
               FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT,
               FOREIGN KEY(group_id) REFERENCES groups(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
         `CREATE TABLE objects(id INTEGER PRIMARY KEY, res_id TEXT NOT NULL, uuid TEXT NOT NULL,
@@ -623,10 +630,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {number} groupIndex If group is ordered, you can provide an index this resource has in the group.
    * If not specified, relation will have no index. If you specify an index and group you are going to link to
    * is not ordered, the function will fail.
+   * @param relationTag relation tag containing context-dependent information on the relation
    * @returns {Promise<RelatedGroup>} Relation that has been created
    */
   async addGroupRelation(resource: Resource|string, groupUuid: Group|string,
-                         groupIndex?: number): Promise<RelatedGroup> {
+                         groupIndex?: number, relationTag?: any): Promise<RelatedGroup> {
     resource = Database.getId(resource);
     groupUuid = Database.getId(groupUuid);
 
@@ -652,11 +660,12 @@ export class LibraryDatabase extends DatabaseWithOptions {
       }
     }
 
-    await this.db.run("INSERT INTO res_to_groups(res_id, group_id, group_index) VALUES(?, ?, ?)",
-        [ resource, groupUuid, GroupRelationSpec.prop('groupIndex').toDb(groupIndex) ]);
+    await this.db.run("INSERT INTO res_to_groups(res_id, group_id, group_index, relation_tag) VALUES(?, ?, ?, ?)",
+        [ resource, groupUuid, GroupRelationSpec.prop('groupIndex').toDb(groupIndex), relationTag]);
 
     let relGroup: RelatedGroup = group as RelatedGroup;
     relGroup.groupIndex = groupIndex == null ? null : groupIndex;
+    relGroup.relationTag = relationTag == null ? null : relationTag;
     return relGroup;
   }
 
@@ -664,13 +673,13 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return this.addGroupRelation(resource, await this.tag(tagText));
   }
 
-  async addLangToResource(resource: Resource|string, langCode: string): Promise<RelatedGroup> {
-    return this.addGroupRelation(resource, await this.lang(langCode));
+  async addLangToResource(resource: Resource|string, langCode: string, original?: boolean): Promise<RelatedGroup> {
+    return this.addGroupRelation(resource, await this.lang(langCode), undefined, original);
   }
 
   async addSeriesToResource(resource: Resource|string, seriesName: string,
-                            seriesIndex: number): Promise<RelatedGroup> {
-    return this.addGroupRelation(resource, await this.series(seriesName), seriesIndex);
+                            seriesIndex: number, comment?: string): Promise<RelatedGroup> {
+    return this.addGroupRelation(resource, await this.series(seriesName), seriesIndex, comment);
   }
 
   /**
@@ -681,15 +690,20 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * to be removed (taking {@link groupType} into account, of course).
    * @param {GroupType} groupType If specified, only relations between the resource and groups with given type are
    * going to be removed.
+   * @param relationTag If specified, relations between the resource and groups with given relation tag are going to be removed.
    * @returns {Promise<void>}
    */
   async removeGroupRelations(resource: Resource|string, group?: Group|string,
-                             groupType?: GroupType|string): Promise<void> {
+                             groupType?: GroupType|string, relationTag?: any): Promise<void> {
     let whereClause = new WhereClauseBuilder();
 
     whereClause.add('res_id', Database.getId(resource));
     if (group != null) {
       whereClause.add('group_id', Database.getId(group));
+    }
+
+    if (relationTag != null) {
+      whereClause.add('relation_tag', relationTag);
     }
 
     if (typeof groupType === 'string') {
@@ -727,8 +741,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
 
-    let rows: { group_id: string, group_index: number, type: string, title: string, title_sort: string }[] =
-        await this.db.all(`SELECT group_index, uuid, type, title, title_sort FROM res_to_groups ` +
+    let rows: { group_id: string, group_index: number, type: string, title: string, title_sort: string, relation_tag: any }[] =
+        await this.db.all(`SELECT group_index, relation_tag, uuid, type, title, title_sort FROM res_to_groups ` +
         `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid WHERE ${whereClause.clause}`,
         whereClause.bound);
 
@@ -736,6 +750,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     for (let row of rows) {
       let group = this._groupSpec.rowToEntry<RelatedGroup>(row);
       group.groupIndex = row.group_index == null || row.group_index < 0 ? null : row.group_index;
+      group.relationTag = row.relation_tag == null ? null : row.relation_tag;
       results.push(group);
     }
 
@@ -1143,7 +1158,8 @@ const PersonRelationSpec = new EntrySpec('res_to_persons', 'person relation', [
 ]);
 
 const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
-    new GroupIndexFieldSpec('groupIndex', 'group_index')
+    new GroupIndexFieldSpec('groupIndex', 'group_index'),
+    new GenericFieldSpec('relationTag', 'relation_tag')
 ]);
 
 /**
