@@ -1,5 +1,5 @@
 import {
-  GroupType, KnownGroupTypes, LibraryDatabase, Person, PersonRelation, RelatedPerson,
+  GroupType, KnownGroupTypes, LibraryDatabase, Person, PersonRelation, RelatedGroup, RelatedPerson,
   Resource
 } from "./library-db";
 import {VarResolver} from "./formatter";
@@ -96,14 +96,46 @@ export async function createResourceVarResolver(lib: LibraryDatabase,
     resource = res;
   }
 
+  function personToValue(pers: RelatedPerson, specifier: string|null): string {
+    if (specifier === 'sort') {
+      return pers.nameSort ? pers.nameSort : (pers.name ? pers.name : '');
+    } else {
+      return pers.name ? pers.name : '';
+    }
+  }
+
+  function groupToValue(group: RelatedGroup, specifier: string|null): string {
+    if (specifier === 'sort') {
+      return group.titleSort ? group.titleSort : (group.title ? group.title : '');
+    } else if (specifier === 'index') {
+      return group.groupIndex == null ? '' : '' + group.groupIndex;
+    } else if (specifier === 'tag') {
+      return group.relationTag == null ? '' : group.relationTag;
+    } else {
+      return group.title == null ? '' : group.title;
+    }
+  }
+
+  function groupsToValues(groupList: RelatedGroup[], specifier: string|null): string[] {
+    return groupList.map(group => groupToValue(group, specifier));
+  }
+
+  function firstGroupToValue(groupList: RelatedGroup[], specifier: string|null): string {
+    if (groupList.length > 0) {
+      return groupToValue(groupList[0], specifier);
+    } else {
+      return '';
+    }
+  }
+
   return function(name: string, specifier: string|null): any|Promise<any> {
     switch (name) {
       case 'title': {
-        return resource.title ? resource.title : '';
-      }
-
-      case 'title_sort': {
-        return resource.titleSort ? resource.titleSort : (resource.title ? resource.title : '');
+        if (specifier === 'sort') {
+          return resource.titleSort ? resource.titleSort : (resource.title ? resource.title : '');
+        } else {
+          return resource.title ? resource.title : '';
+        }
       }
 
       case 'rating': {
@@ -138,73 +170,43 @@ export async function createResourceVarResolver(lib: LibraryDatabase,
 
       case 'author': {
         return new Promise<string | null>((resolve, reject) => {
-          lib.relatedPersons(resource, PersonRelation.Author).then((persons) => {
+          lib.relatedPersons(resource, PersonRelation.Author).then(persons => {
             if (persons.length > 0) {
-              resolve(persons[0].name);
+              resolve(personToValue(persons[0], specifier));
             }
             resolve(null);
           });
         });
       }
 
-      case 'author_sort': {
-        return new Promise<string>((resolve, reject) => {
-          lib.relatedPersons(resource, PersonRelation.Author).then((persons) => {
-            if (persons.length > 0) {
-              resolve(persons[0].nameSort ? persons[0].nameSort : (persons[0].name ? persons[0].name : ''));
-            } else {
-              resolve('');
-            }
-          });
-        });
-      }
-
       case 'authors': {
         return new Promise<string[]>((resolve, reject) => {
-          lib.relatedPersons(resource, PersonRelation.Author).then((persons) => {
-            resolve(persons.map(person => person.name as string));
-          });
-        });
-      }
-
-      case 'authors_sort': {
-        return new Promise<string[]>((resolve, reject) => {
-          lib.relatedPersons(resource, PersonRelation.Author).then((persons) => {
-            resolve(persons.map(
-                person => person.nameSort ? person.nameSort : (person.name ? person.name : '')
-            ));
+          lib.relatedPersons(resource, PersonRelation.Author).then(persons => {
+            resolve(persons.map(person => personToValue(person, specifier)));
           });
         });
       }
 
       case 'tags': {
         return new Promise<string[]>((resolve, reject) => {
-          lib.relatedGroups(resource, KnownGroupTypes.Tag).then((groups) => {
-            resolve(groups.map(group => group.title as string));
+          lib.relatedGroups(resource, KnownGroupTypes.Tag).then(groups => {
+            resolve(groupsToValues(groups, specifier));
           });
         });
       }
 
       case 'category': {
         return new Promise<string>((resolve, reject) => {
-          lib.relatedGroups(resource, KnownGroupTypes.Category).then((groups) => {
-            if (groups.length > 0) {
-              resolve(groups[0].title);
-            } else {
-              resolve('');
-            }
+          lib.relatedGroups(resource, KnownGroupTypes.Category).then(groups => {
+            resolve(firstGroupToValue(groups, specifier));
           });
         });
       }
 
       case 'lang': {
         return new Promise<string>((resolve, reject) => {
-          lib.relatedGroups(resource, KnownGroupTypes.Language).then((langs) => {
-            if (langs.length > 0) {
-              resolve(langs[0].title);
-            } else {
-              resolve('');
-            }
+          lib.relatedGroups(resource, KnownGroupTypes.Language).then(langs => {
+            resolve(firstGroupToValue(langs, specifier));
           });
         });
       }
@@ -212,19 +214,15 @@ export async function createResourceVarResolver(lib: LibraryDatabase,
       case 'langs': {
         return new Promise<string[]>((resolve, reject) => {
           lib.relatedGroups(resource, KnownGroupTypes.Language).then(langs => {
-            return langs.map(lang => lang.title);
+            resolve(groupsToValues(langs, specifier));
           });
         });
       }
 
       case 'series': {
         return new Promise<string>((resolve, reject) => {
-          lib.relatedGroups(resource, KnownGroupTypes.Series).then((seriesList) => {
-            if (seriesList.length > 0) {
-              resolve(seriesList[0].title);
-            } else {
-              resolve('');
-            }
+          lib.relatedGroups(resource, KnownGroupTypes.Series).then(seriesList => {
+            resolve(firstGroupToValue(seriesList, specifier));
           });
         });
       }
@@ -232,19 +230,7 @@ export async function createResourceVarResolver(lib: LibraryDatabase,
       case 'series_list': {
         return new Promise<string[]>(resolve => {
           lib.relatedGroups(resource, KnownGroupTypes.Series).then(seriesList => {
-            resolve(seriesList.map(series => series.title as string));
-          });
-        });
-      }
-
-      case 'series_index': {
-        return new Promise<string>((resolve, reject) => {
-          lib.relatedGroups(resource, KnownGroupTypes.Series).then((seriesList) => {
-            if (seriesList.length > 0) {
-              resolve('' + seriesList[0].groupIndex);
-            } else {
-              resolve('');
-            }
+            resolve(groupsToValues(seriesList, specifier));
           });
         });
       }

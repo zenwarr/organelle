@@ -295,6 +295,16 @@ describe("formatter", function () {
       expect(() => tokenize('{+}')).to.throw();
       expect(() => tokenize('{-}')).to.throw();
     });
+
+    it("should accept single-digit numbers", function () {
+      let tokens = tokenize('{0}');
+      expect(tokens).to.have.lengthOf(3);
+      expect(tokens[1]).to.be.deep.equal({
+        type: TokenType.Number,
+        value: '0',
+        begin: 1
+      })
+    });
   });
 
   describe("ast", function () {
@@ -493,6 +503,35 @@ describe("formatter", function () {
       expect(() => ast('{func|func>func}')).to.throw();
       expect(() => ast('{')).to.throw();
     });
+
+    it("should process single constants", function () {
+      let nodes = ast('{"text"}');
+      expect(nodes).to.be.deep.equal([
+        {
+          type: AstNodeType.Block,
+          optional: false,
+          children: [
+            {
+              type: AstNodeType.String,
+              value: 'text'
+            }
+          ]
+        }
+      ]);
+
+      expect(ast('{0}')).to.be.deep.equal([
+        {
+          type: AstNodeType.Block,
+          optional: false,
+          children: [
+            {
+              type: AstNodeType.Number,
+              value: '0'
+            }
+          ]
+        }
+      ])
+    });
   });
 
   describe("process", function () {
@@ -564,6 +603,11 @@ describe("formatter", function () {
     it("optional blocks", async function () {
       expect(await proc.process('{empty|wrap("[@]")}')).to.be.equal('[]');
       expect(await proc.process('{?empty|wrap("[@]")}')).to.be.equal('');
+    });
+
+    it("optional block should not be ignored when value present", async function () {
+      expect(await proc.process('{?var}')).to.be.equal('some value');
+      expect(await proc.process('{?0}')).to.be.equal('0');
     });
 
     it("specifiers", async function () {

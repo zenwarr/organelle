@@ -661,7 +661,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
 
     await this.db.run("INSERT INTO res_to_groups(res_id, group_id, group_index, relation_tag) VALUES(?, ?, ?, ?)",
-        [ resource, groupUuid, GroupRelationSpec.prop('groupIndex').toDb(groupIndex), relationTag]);
+        [ resource, groupUuid,
+          GroupRelationSpec.prop('groupIndex').toDb(groupIndex),
+          GroupRelationSpec.prop('relationTag').toDb(relationTag)]);
 
     let relGroup: RelatedGroup = group as RelatedGroup;
     relGroup.groupIndex = groupIndex == null ? null : groupIndex;
@@ -1173,7 +1175,11 @@ const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
       PropValidators.Number,
       (value: any): any => value == null ? -1 : value,
       (value: any): any => value < 0 ? null : value),
-    new GenericFieldSpec('relationTag', 'relation_tag')
+    new GenericFieldSpec('relationTag', 'relation_tag',
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+        PropValidators.String,
+        (value: any): any => value == null ? '' : value,
+        (value: any): any => value == null ? null : value)
 ]);
 
 /**

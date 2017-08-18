@@ -380,9 +380,11 @@ function* polymArgsCheck(count: number, input: any, ...args: any[]): IterableIte
 }
 
 export class TemplateProcessor {
-  constructor(varResolver: VarResolver, strictVarResolve: boolean = false) {
+  constructor(varResolver?: VarResolver, strictVarResolve: boolean = false) {
     this._strictVarResolve = strictVarResolve;
-    this.addVarResolver(varResolver);
+    if (varResolver) {
+      this.addVarResolver(varResolver);
+    }
   }
 
   addVarResolver(resolver: VarResolver): void {
@@ -428,7 +430,8 @@ export class TemplateProcessor {
           for (let j = 0; j < node.children.length; ++j) {
             let childNode = node.children[j];
             curValue = await this._resolveExpr(curValue, childNode);
-            if (j === 0 && blockNode.optional) {
+            if (j === 0 && blockNode.optional && (curValue == null ||
+                    (typeof curValue === 'string' && !curValue.length))) {
               curValue = '';
               break;
             }
@@ -857,7 +860,7 @@ class AstCreator {
 
           if (this._token == null) {
             throw new Error('Unexpected end of input: function or variable expected');
-          } else if (this._token.type === TokenType.Ident) {
+          } else {
             blockNode.children = this._handleFilterList();
             this._token = this._cur();
 
@@ -955,7 +958,7 @@ class AstCreator {
 
     if (this._token.type === TokenType.String || this._token.type === TokenType.Number) {
       let node: AstNode = {
-        type: AstNodeType.String,
+        type: this._token.type === TokenType.String ? AstNodeType.String : AstNodeType.Number,
         value: this._token.value
       };
       this._token = this._next();

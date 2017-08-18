@@ -23,7 +23,8 @@ const MIST = uuid.v4(),
     LANG_ENGLISH = uuid.v4(),
     LANG_RUSSIAN = uuid.v4(),
     CATEGORY1 = uuid.v4(),
-    CATEGORY2 = uuid.v4();
+    CATEGORY2 = uuid.v4(),
+    SERIES1 = uuid.v4();
 
 async function fillTestData(db: LibraryDatabase) {
   await db.addResource({
@@ -140,7 +141,16 @@ async function fillTestData(db: LibraryDatabase) {
     titleSort: 'group 2'
   });
 
+  await db.addGroup({
+    uuid: SERIES1,
+    groupType: db.getGroupType(KnownGroupTypes.Series) as GroupType,
+    title: 'The Cool Series',
+    titleSort: 'Cool Series, The'
+  });
+
   await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+
+  await db.addGroupRelation(MIST, SERIES1, 1);
 }
 
 describe('metadata', function() {
@@ -162,16 +172,16 @@ describe('metadata', function() {
       return proc.process('{title}').should.eventually.be.equal('The Mist');
     });
 
-    it("should resolve title_sort", async function () {
-      return proc.process('{title_sort}').should.eventually.be.equal('Mist, The');
+    it("should resolve title sort", async function () {
+      return proc.process('{title#sort}').should.eventually.be.equal('Mist, The');
     });
 
     it("should resolve author", async function () {
       return proc.process('{author}').should.eventually.be.equal('Stephen King');
     });
 
-    it("should resolve author_sort", async function () {
-      return proc.process('{author_sort}').should.eventually.be.equal('King, Stephen');
+    it("should resolve author sort", async function () {
+      return proc.process('{author#sort}').should.eventually.be.equal('King, Stephen');
     });
 
     it("should resolve author list", async function () {
@@ -180,9 +190,14 @@ describe('metadata', function() {
           ['Stephen King, Person 2', 'Person 2, Stephen King']);
     });
 
+    it("should resolve series index", async function () {
+      expect(await proc.process('{series#sort} {?series#index|wrap("[@]")}'))
+          .to.be.equal('Cool Series, The [1]');
+    });
+
     it("should resolve author sort list", async function () {
       await lib.addPersonRelation(MIST, PERSON2, PersonRelation.Author);
-      expect(await proc.process('{authors_sort|join(" & ")}')).to.be.oneOf(
+      expect(await proc.process('{authors#sort|join(" & ")}')).to.be.oneOf(
           ['King, Stephen & Person 2', 'Person 2 & King, Stephen']);
     });
 
