@@ -609,14 +609,14 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
     }
 
-    let rows: { relation: number, uuid: string, name: string, name_sort: string }[] = await this.db.all(
+    let rows: any[] = await this.db.all(
         `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid WHERE ${whereClause.clause}`,
         whereClause.bound);
 
     let results: RelatedPerson[] = [];
     for (let row of rows) {
       let person = PersonSpec.rowToEntry<RelatedPerson>(row);
-      person.relation = row.relation as PersonRelation;
+      PersonRelationSpec.rowToEntry(row, person);
       results.push(person);
     }
 
@@ -741,7 +741,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
 
-    let rows: { group_id: string, group_index: number, type: string, title: string, title_sort: string, relation_tag: any }[] =
+    let rows: any[] =
         await this.db.all(`SELECT group_index, relation_tag, uuid, type, title, title_sort FROM res_to_groups ` +
         `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid WHERE ${whereClause.clause}`,
         whereClause.bound);
@@ -749,8 +749,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     let results: RelatedGroup[] = [];
     for (let row of rows) {
       let group = this._groupSpec.rowToEntry<RelatedGroup>(row);
-      group.groupIndex = row.group_index == null || row.group_index < 0 ? null : row.group_index;
-      group.relationTag = row.relation_tag == null ? null : row.relation_tag;
+      GroupRelationSpec.rowToEntry(row, group);
       results.push(group);
     }
 
@@ -790,19 +789,16 @@ export class LibraryDatabase extends DatabaseWithOptions {
       throw new Error('Cannot update an object relation: rowId is invalid');
     }
 
-    let setList: string[] = [], bound: any[] = [];
+    let setClause = new SetClauseBuilder();
     for (let propName of Object.keys(obj)) {
       if (ObjectSpec.columnSupported(propName)) {
-        setList.push(ObjectSpec.prop(propName).column + ' = ?');
-        bound.push(ObjectSpec.prop(propName).toDb((obj as any)[propName]))
+        let fieldSpec = ObjectSpec.prop(propName);
+        setClause.add(fieldSpec.column, fieldSpec.toDb((obj as any)[fieldSpec.prop]));
       }
     }
 
-    bound.push(obj.rowId);
-
-    let setClause = setList.join(', ');
-
-    let result = await this.db.run(`UPDATE objects SET ${setClause} WHERE id = ?`, bound);
+    let result = await this.db.run(`UPDATE objects SET ${setClause.clause} WHERE id = ?`,
+        [ ...setClause.bound, obj.rowId ]);
     if (result.changes === 0) {
       throw new Error('Cannot update object relation: no record with given rowId exists');
     }
@@ -911,6 +907,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
 }
 
 type PropValidator = (value: any) => boolean;
+type PropConvertor = (value: any) => any;
 
 namespace PropValidators {
   function ofClass(value: any, className: string): boolean {
@@ -975,8 +972,13 @@ class EntrySpec {
     return this._fieldSpecs.some(spec => spec.column === column);
   }
 
-  rowToEntry<T>(row: { [name: string]: any }): T {
-    let result: { [name: string]: any } = {};
+  rowToEntry<T>(row: { [name: string]: any }, completeObject?: { [name: string]: any }): T {
+    let result: { [name: string]: any };
+    if (completeObject != null) {
+      result = completeObject;
+    } else {
+      result = {};
+    }
 
     Object.keys(row).forEach(column => {
       if (this.columnSupported(column)) {
@@ -1002,19 +1004,28 @@ interface FieldSpec {
 
 class GenericFieldSpec implements FieldSpec {
   constructor(protected _prop: string, protected _column: string, protected _toDbValidator?: PropValidator,
-              protected _fromDbValidator?: PropValidator) { }
+              protected _fromDbValidator?: PropValidator, protected _toDb?: PropConvertor,
+              protected _fromDb?: PropConvertor) { }
 
   get prop(): string { return this._prop; }
   get column(): string { return this._column; }
 
   toDb(value: any): any {
     this.validateToDb(value);
-    return value;
+    if (this._toDb) {
+      return this._toDb(value);
+    } else {
+      return value;
+    }
   }
 
   fromDb(value: any): any {
     this.validateFromDb(value);
-    return value;
+    if (this._fromDb) {
+      return this._fromDb(value);
+    } else {
+      return value;
+    }
   }
 
   validateToDb(value: any): void {
@@ -1083,9 +1094,22 @@ class PublishDateSpec extends GenericFieldSpec {
 
 class GroupTypeFieldSpec extends GenericFieldSpec {
   constructor(prop: string, column: string, protected _db: LibraryDatabase) {
-    super(prop, column,
-        (value: any): boolean => (value != null && (typeof value === 'string' || (value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0))),
-        (value: any): boolean => (typeof value === 'string' && value.length > 0));
+    super(prop, column);
+  }
+
+  validateToDb(value: any): void {
+    if (value != null && ((typeof value === 'string' && value.length) ||
+        (value.uuid != null && typeof value.uuid === 'string' && value.uuid.length > 0))) {
+      return;
+    }
+    throw new Error(`Invalid value for a database column "${this.column}"`);
+  }
+
+  validateFromDb(value: any): void {
+    if (typeof value === 'string' && value.length > 0) {
+      return;
+    }
+    throw new Error(`Invalid value for a database column "${this.column}"`);
   }
 
   toDb(value: any): any {
@@ -1094,20 +1118,6 @@ class GroupTypeFieldSpec extends GenericFieldSpec {
 
   fromDb(value: any): any {
     return this._db.getGroupType(value);
-  }
-}
-
-class GroupIndexFieldSpec extends GenericFieldSpec {
-  constructor(prop: string, column: string) {
-    super(prop, column, PropValidators.OneOf(PropValidators.Number, PropValidators.Empty), PropValidators.Number);
-  }
-
-  toDb(value: any): any {
-    return value == null ? -1 : value;
-  }
-
-  fromDb(value: any): any {
-    return value < 0 ? null : value;
   }
 }
 
@@ -1127,8 +1137,8 @@ const ResourceSpec = new EntrySpec('resources', 'resource', [
         PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
         PropValidators.OneOf(PropValidators.String, PropValidators.Empty)),
   new GenericFieldSpec('desc', 'desc',
-      PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
-      PropValidators.OneOf(PropValidators.String, PropValidators.Empty))
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty))
 ]);
 
 const PersonSpec = new EntrySpec('persons', 'person', [
@@ -1158,7 +1168,11 @@ const PersonRelationSpec = new EntrySpec('res_to_persons', 'person relation', [
 ]);
 
 const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
-    new GroupIndexFieldSpec('groupIndex', 'group_index'),
+  new GenericFieldSpec('groupIndex', 'group_index',
+      PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
+      PropValidators.Number,
+      (value: any): any => value == null ? -1 : value,
+      (value: any): any => value < 0 ? null : value),
     new GenericFieldSpec('relationTag', 'relation_tag')
 ]);
 
@@ -1178,23 +1192,15 @@ function workaroundSpread(obj: { [name: string]: any }, uuid: string): any {
 }
 
 abstract class ClauseBuilder {
-  abstract add(column: string, value: any): void;
   abstract get clause(): string;
-  abstract get bound(): any[];
-}
 
-export class WhereClauseBuilder extends ClauseBuilder {
   add(column: string, value: any): void {
     this.addRaw(column + ' = ?', value);
   }
 
   addRaw(cond: string, value: any): void {
-    this._whereList.push(cond);
+    this._list.push(cond);
     this._bound.push(value);
-  }
-
-  get clause(): string {
-    return this._whereList.join(' AND ');
   }
 
   get bound(): any[] {
@@ -1203,6 +1209,18 @@ export class WhereClauseBuilder extends ClauseBuilder {
 
   /** Protected area **/
 
-  protected _whereList: string[] = [];
+  protected _list: string[] = [];
   protected _bound: any[] = [];
+}
+
+export class WhereClauseBuilder extends ClauseBuilder {
+  get clause(): string {
+    return this._list.join(' AND ');
+  }
+}
+
+export class SetClauseBuilder extends ClauseBuilder {
+  get clause(): string {
+    return this._list.join(', ');
+  }
 }
