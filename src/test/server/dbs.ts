@@ -834,6 +834,71 @@ describe('dbs', function() {
         expect(resources.map(x => x.uuid)).to.be.deep.equal([ TOLL, MOCKINGBIRD, MIST ]);
       });
     });
+
+    describe("Searching", function() {
+      let db: LibraryDatabase;
+
+      beforeEach(async function () {
+        db = new LibraryDatabase(':memory:');
+        await db.create();
+        return fillTestData(db);
+      });
+
+      it("should search persons", async function () {
+        let persons = await db.findPersons('Stephen King');
+        expect(persons).to.have.lengthOf(1);
+        expect(persons[0].uuid).to.be.equal(KING);
+      });
+
+      it("should return all persons if no search string given", async function () {
+        let persons = await db.findPersons();
+        expect(persons).to.have.lengthOf(6);
+      });
+
+      it("should search a sort name", async function () {
+        let persons = await db.findPersons('King, Stephen');
+        expect(persons).to.have.lengthOf(1);
+        expect(persons[0].uuid).to.be.equal(KING);
+      });
+
+      it("should return only persons which have specific relation", async function () {
+        await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+
+        let persons = await db.findPersons(undefined, PersonRelation.Author);
+        expect(persons).to.have.lengthOf(1);
+        expect(persons[0].uuid).to.be.equal(KING);
+      });
+
+      it("should search groups", async function () {
+        let groups = await db.findGroups('english');
+        expect(groups).to.have.lengthOf(1);
+        expect(groups[0].uuid).to.be.equal(LANG_ENGLISH);
+      });
+
+      it("should return all groups if no search string given", async function () {
+        let groups = await db.findGroups();
+        expect(groups).to.have.lengthOf(7);
+      });
+
+      it("should return all groups of a specific type", async function () {
+        let groups = await db.findGroups(undefined, KnownGroupTypes.Language);
+        expect(groups).to.have.lengthOf(2);
+        expect(groups[0].uuid).to.be.equal(LANG_ENGLISH);
+        expect(groups[1].uuid).to.be.equal(LANG_RUSSIAN);
+      });
+
+      it("should search inside a specific type", async function () {
+        let groups = await db.findGroups('russian', KnownGroupTypes.Language);
+        expect(groups).to.have.lengthOf(1);
+        expect(groups[0].uuid).to.be.equal(LANG_RUSSIAN);
+      });
+
+      it("should search a group sort title", async function () {
+        let groups = await db.findGroups('Title, The');
+        expect(groups).to.have.lengthOf(1);
+        expect(groups[0].uuid).to.be.equal(SORTING_TITLE);
+      });
+    });
   });
 });
 
@@ -851,7 +916,8 @@ const MIST = uuid.v4(),
       LANG_ENGLISH = uuid.v4(),
       LANG_RUSSIAN = uuid.v4(),
       CATEGORY1 = uuid.v4(),
-      CATEGORY2 = uuid.v4();
+      CATEGORY2 = uuid.v4(),
+      SORTING_TITLE = uuid.v4();
 
 async function fillTestData(db: LibraryDatabase) {
   await db.addResource({
@@ -966,5 +1032,12 @@ async function fillTestData(db: LibraryDatabase) {
     groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
     title: 'group 2',
     titleSort: 'group 2'
+  });
+
+  await db.addGroup({
+    uuid: SORTING_TITLE,
+    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    title: 'The Title',
+    titleSort: 'Title, The'
   });
 }

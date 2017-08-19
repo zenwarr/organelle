@@ -422,7 +422,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   async findResourcesWhere(where: WhereClauseBuilder): Promise<Resource[]> {
-    let rows = await this.db.all(`SELECT * FROM resources ${where.clause}`, where.bound);
+    let rows = await this.db.all(`SELECT * FROM resources ${where.clause} ORDER BY title_sort`, where.bound);
     return rows.map((row: any): Group => ResourceSpec.rowToEntry(row));
   }
 
@@ -463,23 +463,29 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return this._removeEntry(Database.getId(person), PersonSpec);
   }
 
-  async findPersons(nameOrRelation: string|PersonRelation): Promise<Person[]> {
+  async findPersons(name?: string, relation?: PersonRelation): Promise<Person[]> {
     let where = new WhereClauseBuilder();
 
-    if (typeof nameOrRelation === 'string') {
-      where.add('name',
-          PersonRelationSpec.prop('name').toDb(nameOrRelation));
-    } else {
-      where.addRaw('uuid IN (SELECT person_id FROM res_to_persons WHERE relation = ?)',
-          PersonRelationSpec.prop('relation').toDb(nameOrRelation));
+    if (name != null) {
+      let nameField = PersonSpec.prop('name');
+      let nameSortField = PersonSpec.prop('nameSort');
+      where.addRaw(`(${nameField.column} = ? OR ${nameSortField.column} = ?)`, [
+          nameField.toDb(name), nameSortField.toDb(name)
+      ]);
     }
 
-    let rows = await this.db.all(`SELECT * FROM persons ${where.clause}`, where.bound);
-    return rows.map((row: any) => PersonSpec.rowToEntry(row));
+    if (relation != null) {
+      let relationField = PersonRelationSpec.prop('relation');
+      where.addRaw(`uuid IN (SELECT person_id FROM res_to_persons WHERE ${relationField.column} = ?)`,
+          relationField.toDb(relation));
+    }
+
+    let rows = await this.db.all(`SELECT * FROM persons ${where.clause} ORDER BY name_sort`, where.bound);
+    return rows.map(row => PersonSpec.rowToEntry(row));
   }
 
-  findAuthors(): Promise<Person[]> {
-    return this.findPersons(PersonRelation.Author);
+  findAuthors(name?: string): Promise<Person[]> {
+    return this.findPersons(name, PersonRelation.Author);
   }
 
   async findPerson(name: string): Promise<Person|null> {
@@ -559,12 +565,15 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     if (text != null) {
       let titleField = this._groupSpec.prop('title');
-      where.add(titleField.column, titleField.toDb(text));
+      let titleSortField = this._groupSpec.prop('titleSort');
+      where.addRaw(`(${titleField.column} = ? OR ${titleSortField.column} = ?)`, [
+          titleField.toDb(text), titleSortField.toDb(text)
+      ]);
     }
 
     if (groupType != null) {
       let groupTypeField = this._groupSpec.prop('groupType');
-      where.add(groupTypeField.column, groupTypeField.toDb(KnownGroupTypes.Tag));
+      where.add(groupTypeField.column, groupTypeField.toDb(groupType));
     }
 
     return this.findGroupsWhere(where);
@@ -592,7 +601,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   async findGroupsWhere(where: WhereClauseBuilder): Promise<Group[]> {
-    let rows = await this.db.all(`SELECT * FROM groups ${where.clause}`, where.bound);
+    let rows = await this.db.all(`SELECT * FROM groups ${where.clause} ORDER BY title_sort`, where.bound);
     return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
   }
 
@@ -671,7 +680,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
 
     let rows: any[] = await this.db.all(
-        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause}`,
+        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause} ORDER BY name_sort`,
         whereClause.bound);
 
     let results: RelatedPerson[] = [];
@@ -806,7 +815,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     let rows: any[] =
         await this.db.all(`SELECT group_index, relation_tag, uuid, type, title, title_sort FROM res_to_groups ` +
-        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause}`,
+        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause} ORDER BY title_sort`,
         whereClause.bound);
 
     let results: RelatedGroup[] = [];
@@ -830,7 +839,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.add('tag', ObjectSpec.prop('tag').toDb(tag));
     }
 
-    let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag FROM objects ${whereClause.clause}`,
+    let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag FROM objects ${whereClause.clause} ORDER BY tag`,
         whereClause.bound);
 
     return rows.map(row => ObjectSpec.rowToEntry<RelatedObject>(row));
@@ -1267,7 +1276,13 @@ abstract class ClauseBuilder {
 
   addRaw(cond: string, value: any): void {
     this._list.push(cond);
-    this._bound.push(value);
+    if (Array.isArray(value)) {
+      for (let val of value) {
+        this._bound.push(val);
+      }
+    } else {
+      this._bound.push(value);
+    }
   }
 
   get bound(): any[] {
