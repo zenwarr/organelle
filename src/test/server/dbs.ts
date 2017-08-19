@@ -6,7 +6,7 @@ import * as chaiAsPromised from "chai-as-promised";
 import {DatabaseWithOptions} from "../../server/db";
 import {
   GroupType, KnownGroupTypes, LibraryDatabase, ObjectRole, PersonRelation, RelatedObject,
-  Resource
+  Resource, SortMode
 } from "../../server/library-db";
 import uuid = require("uuid");
 import {dateToTimestamp} from "../../server/common";
@@ -344,8 +344,6 @@ describe('dbs', function() {
       it("should add a resource with default values", async function () {
         let clock = sinon.useFakeTimers();
         clock.tick(10000);
-
-        console.log((new Date()).toUTCString());
 
         try {
           let res = await db.addResource({
@@ -833,6 +831,14 @@ describe('dbs', function() {
         expect(resources).to.have.lengthOf(3);
         expect(resources.map(x => x.uuid)).to.be.deep.equal([ TOLL, MOCKINGBIRD, MIST ]);
       });
+
+      it("should return resources in reversed order", async function () {
+        let resources = await db.findResources({
+          sort: SortMode.Desc
+        });
+        expect(resources).to.have.lengthOf(3);
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([ MIST, MOCKINGBIRD, TOLL ]);
+      });
     });
 
     describe("Searching", function() {
@@ -897,6 +903,25 @@ describe('dbs', function() {
         let groups = await db.findGroups('Title, The');
         expect(groups).to.have.lengthOf(1);
         expect(groups[0].uuid).to.be.equal(SORTING_TITLE);
+      });
+
+      it("should return only range of persons", async function () {
+        let persons = await db.findPersons(undefined, undefined, {
+          offset: 1,
+          maxCount: 2,
+        });
+        expect(persons).to.have.lengthOf(2);
+        expect(persons[0].uuid).to.be.equal(KING);
+        expect(persons[1].uuid).to.be.equal(LEE);
+      });
+
+      it("should return only range of groups", async function () {
+        let groups = await db.findGroups(undefined, KnownGroupTypes.Category, {
+          offset: 1,
+          maxCount: 1
+        });
+        expect(groups).to.have.lengthOf(1);
+        expect(groups[0].uuid).to.be.equal(CATEGORY2);
       });
     });
   });

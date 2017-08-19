@@ -262,6 +262,17 @@ const KNOWN_GROUP_TYPES_DATA: GroupType[] = [
   }
 ];
 
+export enum SortMode {
+  Asc,
+  Desc
+}
+
+export interface ListOptions {
+  offset?: number;
+  maxCount?: number;
+  sort?: SortMode;
+}
+
 export class LibraryDatabase extends DatabaseWithOptions {
   constructor(filename: string) {
     super(filename, CUR_LIBRARY_VERSION);
@@ -416,13 +427,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return this._removeEntry(Database.getId(resource), ResourceSpec);
   }
 
-  async findResources(): Promise<Resource[]> {
+  async findResources(options?: ListOptions): Promise<Resource[]> {
     let where = new WhereClauseBuilder();
-    return this.findResourcesWhere(where);
-  }
-
-  async findResourcesWhere(where: WhereClauseBuilder): Promise<Resource[]> {
-    let rows = await this.db.all(`SELECT * FROM resources ${where.clause} ORDER BY title_sort`, where.bound);
+    let limits = LibraryDatabase._limits(ResourceSpec.prop('titleSort').column, options);
+    let rows = await this.db.all(`SELECT * FROM resources ${where.clause} ${limits}`, where.bound);
     return rows.map((row: any): Group => ResourceSpec.rowToEntry(row));
   }
 
@@ -463,7 +471,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return this._removeEntry(Database.getId(person), PersonSpec);
   }
 
-  async findPersons(name?: string, relation?: PersonRelation): Promise<Person[]> {
+  async findPersons(name?: string, relation?: PersonRelation, options?: ListOptions): Promise<Person[]> {
     let where = new WhereClauseBuilder();
 
     if (name != null) {
@@ -480,7 +488,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
           relationField.toDb(relation));
     }
 
-    let rows = await this.db.all(`SELECT * FROM persons ${where.clause} ORDER BY name_sort`, where.bound);
+    let limits = LibraryDatabase._limits(PersonSpec.prop('nameSort').column, options);
+
+    let rows = await this.db.all(`SELECT * FROM persons ${where.clause} ${limits}`, where.bound);
     return rows.map(row => PersonSpec.rowToEntry(row));
   }
 
@@ -560,7 +570,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return await this.findGroup(text, KnownGroupTypes.Series) || await this.addSeries(text);
   }
 
-  async findGroups(text?: string, groupType?: GroupType|string): Promise<Group[]> {
+  async findGroups(text?: string, groupType?: GroupType|string, options?: ListOptions): Promise<Group[]> {
     let where = new WhereClauseBuilder();
 
     if (text != null) {
@@ -576,7 +586,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       where.add(groupTypeField.column, groupTypeField.toDb(groupType));
     }
 
-    return this.findGroupsWhere(where);
+    let limits = LibraryDatabase._limits(this._groupSpec.prop('titleSort').column, options);
+
+    let rows = await this.db.all(`SELECT * FROM groups ${where.clause} ${limits}`, where.bound);
+    return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
   }
 
   async findGroup(text?: string, groupType?: GroupType|string): Promise<Group|null> {
@@ -598,11 +611,6 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   findLangs(code?: string): Promise<Group[]> {
     return this.findGroups(code, KnownGroupTypes.Language);
-  }
-
-  async findGroupsWhere(where: WhereClauseBuilder): Promise<Group[]> {
-    let rows = await this.db.all(`SELECT * FROM groups ${where.clause} ORDER BY title_sort`, where.bound);
-    return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
   }
 
   /**
@@ -671,7 +679,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * will be returned.
    * @returns {Promise<RelatedPerson[]>} List of relations between persons and this resource.
    */
-  async relatedPersons(resource: Resource|string, relation?: PersonRelation): Promise<RelatedPerson[]> {
+  async relatedPersons(resource: Resource|string, relation?: PersonRelation, options?: ListOptions): Promise<RelatedPerson[]> {
     let whereClause = new WhereClauseBuilder();
 
     whereClause.add('res_id', Database.getId(resource));
@@ -679,8 +687,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
     }
 
+    let limits = LibraryDatabase._limits(PersonSpec.prop('nameSort').column, options);
+
     let rows: any[] = await this.db.all(
-        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause} ORDER BY name_sort`,
+        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause} ${limits}`,
         whereClause.bound);
 
     let results: RelatedPerson[] = [];
@@ -796,7 +806,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * If not specified, all relations regardless of type will be returned.
    * @returns {Promise<RelatedGroup[]>}
    */
-  async relatedGroups(resource: Resource|string, groupType?: GroupType|string): Promise<RelatedGroup[]> {
+  async relatedGroups(resource: Resource|string, groupType?: GroupType|string,
+                      options?: ListOptions): Promise<RelatedGroup[]> {
     let whereClause = new WhereClauseBuilder();
 
     whereClause.add('res_id', Database.getId(resource));
@@ -813,9 +824,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
 
+    let limits = LibraryDatabase._limits(this._groupSpec.prop('titleSort').column, options);
+
     let rows: any[] =
         await this.db.all(`SELECT group_index, relation_tag, uuid, type, title, title_sort FROM res_to_groups ` +
-        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause} ORDER BY title_sort`,
+        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause} ${limits}`,
         whereClause.bound);
 
     let results: RelatedGroup[] = [];
@@ -828,7 +841,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return results;
   }
 
-  async relatedObjects(resource: Resource|string, role?: ObjectRole, tag?: string): Promise<RelatedObject[]> {
+  async relatedObjects(resource: Resource|string, role?: ObjectRole, tag?: string, options?: ListOptions): Promise<RelatedObject[]> {
     let whereClause = new WhereClauseBuilder();
 
     whereClause.add('res_id', Database.getId(resource));
@@ -839,7 +852,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.add('tag', ObjectSpec.prop('tag').toDb(tag));
     }
 
-    let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag FROM objects ${whereClause.clause} ORDER BY tag`,
+    let limits = LibraryDatabase._limits(ObjectSpec.prop('tag').column, options);
+
+    let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag ` +
+                                  `FROM objects ${whereClause.clause} ${limits}`,
         whereClause.bound);
 
     return rows.map(row => ObjectSpec.rowToEntry<RelatedObject>(row));
@@ -975,6 +991,29 @@ export class LibraryDatabase extends DatabaseWithOptions {
   protected async _removeEntry<T>(uuid: string, spec: EntrySpec): Promise<void> {
     uuid = Database.validateId(uuid);
     await this.db.run(`DELETE FROM ${spec.table} WHERE uuid = ?`, [ uuid ]);
+  }
+
+  protected static _limits(sortColumn: string, options?: ListOptions): string {
+    let resultParts: string[] = [];
+
+    let mode: string = 'ASC';
+    if (options && options.sort != null && typeof options.sort === 'number') {
+      if (options.sort === SortMode.Desc) {
+        mode = 'DESC';
+      }
+    }
+    resultParts.push(`ORDER BY ${sortColumn} COLLATE NOCASE ${mode}`);
+
+    if (options && options.maxCount != null && typeof options.maxCount === 'number'
+        && options.maxCount >= 0) {
+      resultParts.push('LIMIT ' + Math.round(options.maxCount));
+    }
+    if (options && options.offset != null && typeof options.offset === 'number'
+        && options.offset >= 0) {
+      resultParts.push('OFFSET ' + Math.round(options.offset));
+    }
+
+    return resultParts.join(' ');
   }
 }
 
