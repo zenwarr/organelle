@@ -818,6 +818,22 @@ describe('dbs', function() {
         expect(rels[0]).to.have.property('relationTag', 'extra info');
       });
     });
+
+    describe("Sorting", function () {
+      let db: LibraryDatabase;
+
+      beforeEach(async function () {
+        db = new LibraryDatabase(':memory:');
+        await db.create();
+        return fillTestData(db);
+      });
+
+      it("should return resources ordered by title sort", async function () {
+        let resources = await db.findResources();
+        expect(resources).to.have.lengthOf(3);
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([ TOLL, MOCKINGBIRD, MIST ]);
+      });
+    });
   });
 });
 
