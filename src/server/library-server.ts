@@ -1,20 +1,8 @@
 import {Library} from "./library";
-import * as url from 'url';
+import * as restify from 'restify';
+import * as restifyErrors from 'restify-errors';
 import {Database} from "./db";
 import {Group, GroupType, Person, personRelationToString, RelatedPerson, Resource} from "./library-db";
-
-export interface ApiResponse {
-  errors: {
-    code?: string,
-    detail?: string,
-  }[],
-  data?: any
-}
-
-interface Query {
-  uri: string;
-  path: string;
-}
 
 export class ApiError extends Error {
   constructor(msg: string, public errCode?: ErrorCode) {
@@ -23,100 +11,82 @@ export class ApiError extends Error {
 }
 
 enum ErrorCode {
-  ApiPathInvalid = 'ER_API_PATH_INVALID',
   NotImplemented = 'ER_NOT_IMPLEMENTED',
   InvalidArgument = 'ER_INVALID_ARGUMENT',
   NotExists = 'ER_DOES_NOT_EXIST',
 }
 
-type RouteHandler = (...args: string[]) => Promise<any>;
-
-interface RouteData {
-  regex: RegExp,
-  handler: RouteHandler
-}
+export const DEF_SERVER_PORT = 8080;
 
 export class LibraryServer {
   constructor(protected _lib: Library) {
+    this._server = restify.createServer();
     this._initRoutes();
   }
 
-  async handle(query: Query|string): Promise<ApiResponse> {
-    if (typeof query === 'string') {
-      query = {
-        uri: '',
-        path: query.toLowerCase()
-      };
-    }
+  start(port: number = DEF_SERVER_PORT): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this._server.listen(port, resolve);
+    });
+  }
 
-    let apiData: any;
-    try {
-      let found: boolean = false;
-      for (let j = 0; j < this.ROUTES.length; j++) {
-        let route = this.ROUTES[j];
-        let match = query.path.match(route.regex);
-        if (match) {
-          apiData = await route.handler(...match.slice(1));
-          found = true;
-        }
-      }
+  stop(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this._server.once('close', () => {
+        resolve();
+      });
+      this._server.close();
+    });
+  }
 
-      if (!found) {
-        throw new ApiError('API path is invalid', ErrorCode.ApiPathInvalid);
-      }
-
-      if (apiData == null) {
-        apiData = [];
-      }
-
-      return {
-        errors: [],
-        data: apiData
-      };
-    } catch (err) {
-      return {
-        errors: [
-          {
-            code: (err.errCode ? '' + err.errCode : 'ER_GENERIC'),
-            detail: err.message
-          }
-        ]
-      };
-    }
+  get server(): restify.Server {
+    return this._server;
   }
 
   /** Protected area **/
 
-  protected ROUTES: RouteData[];
+  protected _server: restify.Server;
 
   protected _initRoutes(): void {
-    this.ROUTES = [
-      {
-        regex: new RegExp('^/resources/$'),
-        handler: this._handleResources.bind(this)
-      },
-      {
-        regex: new RegExp('^/resources/([a-z0-9\-]+)/$'),
-        handler: this._handleResource.bind(this)
-      },
-      {
-        regex: new RegExp('^/authors/$'),
-        handler: this._handleAuthors.bind(this)
-      },
-      {
-        regex: new RegExp('^/tags/$'),
-        handler: this._handleTags.bind(this)
-      },
-      {
-        regex: new RegExp('^/resources/([a-z0-9\-]+)/persons/$'),
-        handler: this._handleRelatedPersons.bind(this)
+    let self = this;
+
+    function wrap(func: (...args: string[]) => Promise<any>) {
+      return function(req: restify.Request, resp: restify.Response, next: restify.Next) {
+        func.call(self, req.params).then((apiResponse: any) => {
+          resp.json(200, apiResponse);
+          next();
+        }, (err: ApiError) => {
+          switch (err.errCode) {
+            case ErrorCode.NotImplemented: {
+              next(new restifyErrors.NotImplementedError(err.message));
+            } break;
+
+            case ErrorCode.InvalidArgument: {
+              next(new restifyErrors.BadRequestError(err.message));
+            } break;
+
+            case ErrorCode.NotExists: {
+              next(new restifyErrors.NotFoundError(err.message));
+            } break;
+
+            default: {
+              next(new restifyErrors.InternalServerError(err.message));
+            }
+          }
+        });
       }
-    ];
+    }
+
+    this._server.get('/resources/', wrap(this._handleResources));
+    this._server.get('/resources/:uuid/', wrap(this._handleResource));
+    this._server.get('/resources/:uuid/persons/', wrap(this._handleRelatedPersons));
+    this._server.get('/authors/', wrap(this._handleAuthors));
+    this._server.get('/tags/', wrap(this._handleTags));
   }
 
   protected _resourceToResponse(resource: Resource): any {
     return {
-      id: resource.uuid,
+      uuid: resource.uuid,
       type: 'resource',
       title: resource.title,
       titleSort: resource.titleSort,
@@ -131,7 +101,7 @@ export class LibraryServer {
 
   protected _personToResponse(person: Person): any {
     return {
-      id: person.uuid,
+      uuid: person.uuid,
       type: 'person',
       name: person.name,
       nameSort: person.nameSort,
@@ -140,7 +110,7 @@ export class LibraryServer {
 
   protected _groupToResponse(group: Group): any {
     return {
-      id: group.uuid,
+      uuid: group.uuid,
       type: 'group',
       title: group.title,
       titleSort: group.titleSort,
@@ -150,7 +120,7 @@ export class LibraryServer {
 
   protected _relatedPersonToResponse(person: RelatedPerson): any {
     return {
-      id: person.uuid,
+      uuid: person.uuid,
       type: 'related_person',
       name: person.name,
       nameSort: person.nameSort,
@@ -162,7 +132,9 @@ export class LibraryServer {
     return (await this._lib.libraryDatabase.findResources()).map(value => this._resourceToResponse(value));
   }
 
-  protected async _handleResource(uuid: string): Promise<any> {
+  protected async _handleResource(params: any): Promise<any> {
+    let uuid: string = params.uuid;
+
     try {
       uuid = Database.validateId(uuid);
     } catch (err) {
@@ -185,7 +157,9 @@ export class LibraryServer {
     return (await this._lib.libraryDatabase.findTags()).map(x => this._groupToResponse(x));
   }
 
-  protected async _handleRelatedPersons(resource: string): Promise<any> {
+  protected async _handleRelatedPersons(params: any): Promise<any> {
+    let resource: string = params.uuid;
+
     try {
       resource = Database.validateId(resource);
     } catch (err) {

@@ -6,6 +6,7 @@ import {LibraryDatabase, PersonRelation} from "../../server/library-db";
 import * as sinon from "sinon";
 import {LibraryServer} from "../../server/library-server";
 import {Library} from "../../server/library";
+import * as supertest from 'supertest';
 
 should();
 chai.use(chaiAsPromised);
@@ -14,77 +15,107 @@ describe("LibraryServer", function () {
   let server: LibraryServer;
   let libDb: LibraryDatabase;
   let lib: Library;
-  let clock: sinon.SinonFakeTimers;
+  let fakeDate: Date;
 
   beforeEach(async function() {
-    clock = sinon.useFakeTimers();
+    let clock = sinon.useFakeTimers();
     clock.tick(10000);
+    fakeDate = new Date();
 
-    libDb = await testlib.createTestLib();
+    try {
+      libDb = await testlib.createTestLib();
+    } finally {
+      clock.restore();
+    }
+
     lib = new Library(libDb);
     server = new LibraryServer(lib);
+    await server.start();
   });
 
   afterEach(async function() {
-    clock.restore();
+    await server.stop();
   });
 
-  it("should return an error when path is invalid", async function () {
-    let resp = await server.handle('/invalid/');
-    expect(resp).to.be.deep.equal({
-      errors: [
-        {
-          code: 'ER_API_PATH_INVALID',
-          detail: 'API path is invalid'
-        }
-      ]
-    })
+  it("should return an error when path is invalid", function (done) {
+    supertest(server.server)
+        .get('/invalid/')
+        .expect(404)
+        .end(done);
   });
 
-  it("should list all resources", async function () {
-    let resp = await server.handle('/resources/');
-    expect(resp.errors).to.be.deep.equal([]);
-    expect(resp.data).to.have.lengthOf(testlib.RES_COUNT);
+  it("should list all resources", function (done) {
+    supertest(server.server)
+        .get('/resources/')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(testlib.RES_COUNT);
+        })
+        .end(done);
   });
 
-  it("should list all authors", async function () {
-    let resp = await server.handle('/authors/');
-    expect(resp.errors).to.be.deep.equal([]);
-    expect(resp.data).to.have.lengthOf(testlib.AUTHORS_COUNT);
+  it("should list all authors", function (done) {
+    supertest(server.server)
+        .get('/authors/')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(testlib.AUTHORS_COUNT);
+        })
+        .end(done);
   });
 
-  it("should list all tags", async function () {
-    let resp = await server.handle('/tags/');
-    expect(resp.errors).to.be.deep.equal([]);
-    expect(resp.data).to.have.lengthOf(testlib.TAG_COUNT);
+  it("should list all tags", function (done) {
+    supertest(server.server)
+        .get('/tags')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(testlib.TAG_COUNT);
+        })
+        .end(done);
   });
 
-  it("should show props of a single resource", async function () {
-    let resp = await server.handle('/resources/' + testlib.MIST + '/');
-    expect(resp.errors).to.be.deep.equal([]);
-    expect(resp.data).to.be.deep.equal({
-      id: testlib.MIST,
-      type: 'resource',
-      title: "The Mist",
-      titleSort: "Mist, The",
-      rating: 400,
-      addDate: (new Date()).toUTCString(),
-      lastModifyDate: (new Date()).toUTCString(),
-      publishDate: "1980",
-      publisher: "Viking Press",
-      desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters."
-    });
+  it("should show props of a single resource", function (done) {
+    supertest(server.server)
+        .get('/resources/' + testlib.MIST)
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.be.deep.equal({
+            uuid: testlib.MIST,
+            type: 'resource',
+            title: 'The Mist',
+            titleSort: 'Mist, The',
+            rating: 400,
+            addDate: fakeDate.toUTCString(),
+            lastModifyDate: fakeDate.toUTCString(),
+            publisher: 'Viking Press',
+            publishDate: '1980',
+            desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters."
+          });
+        })
+        .end(done);
   });
 
-  it("should list related persons", async function () {
-    let resp = await server.handle(`/resources/${testlib.MIST}/persons/`);
-    expect(resp.errors).to.be.deep.equal([]);
-    expect(resp.data).to.be.deep.equal([{
-      id: testlib.KING,
-      type: 'related_person',
-      name: 'Stephen King',
-      nameSort: 'King, Stephen',
-      relation: 'author',
-    }]);
+  it("should return 404 when resource does not exist", function (done) {
+    supertest(server.server)
+        .get('/resources/not_exist')
+        .expect(404)
+        .end(done);
+  });
+
+  it("should list related persons", function (done) {
+    supertest(server.server)
+        .get(`/resources/${testlib.MIST}/persons`)
+        .expect((resp: any) => {
+          expect(resp.body).to.be.deep.equal([
+            {
+              uuid: testlib.KING,
+              type: 'related_person',
+              name: 'Stephen King',
+              nameSort: 'King, Stephen',
+              relation: 'author'
+            }
+          ]);
+        })
+        .end(done);
   });
 });
