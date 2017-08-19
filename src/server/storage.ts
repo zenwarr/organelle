@@ -3,6 +3,7 @@ import {isValidTemplate, TemplateProcessor} from "./formatter";
 import * as path from "path";
 import * as fs from 'fs-extra';
 import {Database} from "./db";
+import {RelatedObject} from "./library-db";
 
 const DEF_FILE_TEMPLATE = '{author} - {title}';
 const DEF_DB_FILENAME = 'storage.db';
@@ -15,7 +16,30 @@ export const DEF_IMPORT_OPTIONS: ImportOptions = {
   overwrite: false
 };
 
-export class FileSystemStorage {
+export abstract class AbstractStorage {
+  abstract get db(): StorageDatabase;
+
+  get uuid(): string|null {
+    return this.db.uuid;
+  }
+
+  abstract objectLocations(uuid: string|RelatedObject): IterableIterator<Promise<string>>;
+}
+
+export class FileSystemStorage extends AbstractStorage {
+  *objectLocations(uuid: string|RelatedObject): IterableIterator<Promise<string>> {
+    yield new Promise<string>((resolve, reject) => {
+      this.db.getObject(Database.getId(uuid)).then(storageObject => {
+        if (storageObject && storageObject.location) {
+          let objPath = path.resolve(storageObject, this.root);
+          resolve('file:///' + objPath);
+        } else {
+          reject(new Error('No object with given UUID found'));
+        }
+      });
+    });
+  }
+
   get root(): string {
     return this._root;
   }
@@ -100,6 +124,7 @@ export class FileSystemStorage {
   protected _db: StorageDatabase;
 
   protected constructor(root: string, db: StorageDatabase) {
+    super();
     this._root = root;
     this._db = db;
   }

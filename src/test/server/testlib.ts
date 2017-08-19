@@ -25,7 +25,7 @@ export const MIST = uuid.v4(),
     CATEGORY2 = uuid.v4(),
     SERIES1 = uuid.v4();
 
-export const RES_COUNT: number = 3,
+export const RES_COUNT: number = 9,
     AUTHORS_COUNT = 1,
     TAG_COUNT = 2,
     LANG_COUNT = 2;

@@ -67,6 +67,13 @@ export class Database {
     }
   }
 
+  static validateId(uuid: string|null|undefined): string {
+    if (uuid == null || uuid.length === 0) {
+      throw new Error('Invalid or empty UUID');
+    }
+    return uuid.toLowerCase().trim();
+  }
+
   /** Protected area **/
 
   protected _filename: string;
@@ -80,13 +87,6 @@ export class Database {
 
   protected async _tuneConnection() {
     await this.db.run('PRAGMA foreign_keys = TRUE');
-  }
-
-  protected static _validateId(uuid: string|null|undefined): string {
-    if (uuid == null || uuid.length === 0) {
-      throw new Error('Invalid or empty UUID');
-    }
-    return uuid.toLowerCase().trim();
   }
 }
 

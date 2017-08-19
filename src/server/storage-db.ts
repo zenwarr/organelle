@@ -112,7 +112,7 @@ export class StorageDatabase extends DatabaseWithOptions {
     let where = new WhereClauseBuilder();
     where.add('uuid', Database.getId(obj));
 
-    let stmt = await this.db.run(`DELETE FROM objects WHERE ${where.clause}`, where.bound);
+    let stmt = await this.db.run(`DELETE FROM objects ${where.clause}`, where.bound);
 
     if (stmt.changes === 0) {
       throw new Error(`Cannot remove object with UUID = ${obj}. Object does not exist`);

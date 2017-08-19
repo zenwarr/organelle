@@ -177,7 +177,7 @@ describe('dbs', function() {
         return storage.unregisterObject(TEST_UUID2).should.be.fulfilled;
       });
 
-      it('unreigstered object should be accessible after', async function() {
+      it('unreigstered object should not be accessible after', async function() {
         await storage.unregisterObject(TEST_UUID2);
         return storage.getObject(TEST_UUID2).should.eventually.be.null;
       });
