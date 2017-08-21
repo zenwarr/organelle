@@ -2,25 +2,19 @@ import {Library} from "./library";
 import * as restify from 'restify';
 import * as restifyErrors from 'restify-errors';
 import {Database} from "./db";
-import {Group, GroupType, Person, personRelationToString, RelatedPerson, Resource} from "./library-db";
-
-export class ApiError extends Error {
-  constructor(msg: string, public errCode?: ErrorCode) {
-    super(msg);
-  }
-}
-
-enum ErrorCode {
-  NotImplemented = 'ER_NOT_IMPLEMENTED',
-  InvalidArgument = 'ER_INVALID_ARGUMENT',
-  NotExists = 'ER_DOES_NOT_EXIST',
-}
+import {
+  Group, GroupType, ListOptions, Person, PersonRelation, personRelationFromString, personRelationToString,
+  RelatedPerson,
+  Resource, SortMode
+} from "./library-db";
+import {strictParseInt} from "../common/helpers";
 
 export const DEF_SERVER_PORT = 8080;
 
 export class LibraryServer {
   constructor(protected _lib: Library) {
     this._server = restify.createServer();
+    this._server.use(restify.plugins.queryParser());
     this._initRoutes();
   }
 
@@ -52,26 +46,14 @@ export class LibraryServer {
 
     function wrap(func: (...args: string[]) => Promise<any>) {
       return function(req: restify.Request, resp: restify.Response, next: restify.Next) {
-        func.call(self, req.params).then((apiResponse: any) => {
+        func.call(self, req.params, req.query).then((apiResponse: any) => {
           resp.json(200, apiResponse);
           next();
-        }, (err: ApiError) => {
-          switch (err.errCode) {
-            case ErrorCode.NotImplemented: {
-              next(new restifyErrors.NotImplementedError(err.message));
-            } break;
-
-            case ErrorCode.InvalidArgument: {
-              next(new restifyErrors.BadRequestError(err.message));
-            } break;
-
-            case ErrorCode.NotExists: {
-              next(new restifyErrors.NotFoundError(err.message));
-            } break;
-
-            default: {
-              next(new restifyErrors.InternalServerError(err.message));
-            }
+        }, (err: Error) => {
+          if (err instanceof restifyErrors.HttpError) {
+            next(err);
+          } else {
+            next(new restifyErrors.InternalServerError(err.message));
           }
         });
       }
@@ -128,8 +110,9 @@ export class LibraryServer {
     };
   }
 
-  protected async _handleResources(): Promise<any> {
-    return (await this._lib.libraryDatabase.findResources()).map(value => this._resourceToResponse(value));
+  protected async _handleResources(params: any, query: any): Promise<any> {
+    let opts = this._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findResources(opts)).map(value => this._resourceToResponse(value));
   }
 
   protected async _handleResource(params: any): Promise<any> {
@@ -138,12 +121,12 @@ export class LibraryServer {
     try {
       uuid = Database.validateId(uuid);
     } catch (err) {
-      throw new ApiError(`Invalid argument: ${uuid}`, ErrorCode.InvalidArgument);
+      throw new restifyErrors.BadRequestError(`Invalid resource identifier`);
     }
 
     let resource = await this._lib.libraryDatabase.getResource(uuid);
     if (resource == null) {
-      throw new ApiError('Resource does not exist', ErrorCode.NotExists);
+      throw new restifyErrors.NotFoundError('Resource does not exist');
     }
 
     return this._resourceToResponse(resource);
@@ -157,15 +140,94 @@ export class LibraryServer {
     return (await this._lib.libraryDatabase.findTags()).map(x => this._groupToResponse(x));
   }
 
-  protected async _handleRelatedPersons(params: any): Promise<any> {
+  protected async _handleRelatedPersons(params: any, query: any): Promise<any> {
     let resource: string = params.uuid;
 
     try {
       resource = Database.validateId(resource);
     } catch (err) {
-      throw new ApiError(`Invalid argument: ${resource}`, ErrorCode.InvalidArgument);
+      throw new restifyErrors.BadRequestError(`Invalid resource identifier`);
     }
 
-    return (await this._lib.libraryDatabase.relatedPersons(resource)).map(x => this._relatedPersonToResponse(x));
+    let relation: PersonRelation|undefined = undefined;
+
+    if (query.relation != null) {
+      if (typeof query.relation !== 'string') {
+        throw new restifyErrors.BadRequestError('Multiple person relations are not supported');
+      }
+
+      try {
+        relation = query.relation ? personRelationFromString(query.relation) : undefined;
+      } catch (err) {
+        throw new restifyErrors.BadRequestError('Invalid person relation');
+      }
+    }
+
+    return (await this._lib.libraryDatabase.relatedPersons(resource, relation)).map(x => this._relatedPersonToResponse(x));
+  }
+
+  protected async _handleRelatedAuthors(params: any, query: any): Promise<any> {
+    return this._handleRelatedPersons(params, { ...query, relation: 'author' });
+  }
+
+  protected _listOptionsFromQuery(query: any): ListOptions {
+    let result:ListOptions = { };
+
+    if (query.sort != null) {
+      let sortRaw: string;
+      if (Array.isArray(query.sort)) {
+        sortRaw = query.sort.join(',').trim();
+      } else if (typeof query.sort === 'string' && query.sort) {
+        sortRaw = query.sort.trim();
+      } else {
+        throw new restifyErrors.BadRequestError('Sort option is invalid');
+      }
+
+      if (sortRaw === '-') {
+        result.prefSortMode = SortMode.Desc;
+      } else if (sortRaw === '+') {
+        result.prefSortMode = SortMode.Asc;
+      } else {
+        let sortColumns:string[] = sortRaw.split(',')
+            .map((x: string) => x.trim()).filter((x: string) => x.length > 0);
+        if (sortColumns.length > 0) {
+          result.sortProps = [];
+
+          for (let sortCol of sortColumns) {
+            let hasPlus = sortCol.startsWith('+'),
+                hasMinus = sortCol.startsWith('-');
+
+            result.sortProps.push({
+              propName: (hasPlus || hasMinus) ? sortCol.slice(1).trim() : sortCol,
+              sortMode: hasMinus ? SortMode.Desc : SortMode.Asc
+            });
+          }
+        }
+      }
+    }
+
+    if (query.offset != null) {
+      if (!query.offset || typeof query.offset !== 'string') {
+        throw new restifyErrors.BadRequestError('Offset option is invalid');
+      }
+      let offset = strictParseInt(query.offset);
+      if (offset == null || offset < 0) {
+        throw new restifyErrors.BadRequestError('Offset option is invalid: should be a positive number');
+      }
+      result.offset = offset;
+    }
+
+    if (query.count != null) {
+      if (!query.count || typeof query.count !== 'string') {
+        throw new restifyErrors.BadRequestError('Count option is invalid');
+      }
+      let count = strictParseInt(query.count);
+      if (count == null || count < 0) {
+        throw new restifyErrors.BadRequestError('Offset option is invalid: should be a positive number');
+      }
+      result.maxCount = count;
+    }
+
+    return result;
   }
 }

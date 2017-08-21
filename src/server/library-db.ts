@@ -115,6 +115,15 @@ export function personRelationToString(relation: PersonRelation): string {
   }
 }
 
+export function personRelationFromString(text: string): PersonRelation {
+  let index = RELATION_NAMES.indexOf(text.toLowerCase().trim());
+  if (index >= 0) {
+    return index + 1;
+  } else {
+    throw new Error();
+  }
+}
+
 /**
  * An extended version of Person, which mentions a relation this person has to a resource. All supported types
  * of relations are listed in {@link PersonRelation} enumeration.
@@ -267,10 +276,16 @@ export enum SortMode {
   Desc
 }
 
+export interface SortProp {
+  propName: string;
+  sortMode: SortMode;
+}
+
 export interface ListOptions {
   offset?: number;
   maxCount?: number;
-  sort?: SortMode;
+  sortProps?: SortProp[];
+  prefSortMode?: SortMode;
 }
 
 export class LibraryDatabase extends DatabaseWithOptions {
@@ -429,8 +444,120 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   async findResources(options?: ListOptions): Promise<Resource[]> {
     let where = new WhereClauseBuilder();
-    let limits = LibraryDatabase._limits(ResourceSpec.prop('titleSort').column, options);
-    let rows = await this.db.all(`SELECT * FROM resources ${where.clause} ${limits}`, where.bound);
+
+    let limits = LibraryDatabase._limits('titleSort', { ...options, sortProps: [] });
+
+    // resource queries can have extra sorting options, we can sort resource by foreign fields,
+    // for example, sort resources by author names. To sort results by a foreign field,
+    // options.sortProps.propName should be in the following form: author#nameSort, where author is
+    // one of predefined names for sorting and nameSort is property name.
+
+    // so we need custom sort options processing
+    let joins: string, sort: string;
+    if (options && options.sortProps && options.sortProps.length > 0) {
+      let joinsList: string[] = [],
+          sortList: string[] = [];
+
+      for (let sortProp of options.sortProps) {
+        if (sortProp.propName && sortProp.sortMode != null) {
+          let hashIndex: number = sortProp.propName.indexOf('#');
+          let propName = hashIndex >= 0 ? sortProp.propName.slice(0, hashIndex) : sortProp.propName;
+          let propExtra = hashIndex >= 0 ? sortProp.propName.slice(hashIndex + 1) : '';
+
+          const makePersonJoin = async () => {
+            let sortPropName = propExtra ? propExtra : 'nameSort';
+
+            let [join, viewName] = await this._makeForeignSortJoin(sortPropName, sortProp.sortMode,
+                PersonSpec, PersonRelationSpec);
+            joinsList.push(join);
+
+            sortList.push(LibraryDatabase._makeSort(viewName, sortPropName,
+                sortProp.sortMode, PersonSpec, PersonRelationSpec));
+          };
+
+          const makeGroupJoin = async () => {
+            let sortPropName = propExtra ? propExtra : 'titleSort';
+
+            let [join, viewName] = await this._makeForeignSortJoin(sortPropName, sortProp.sortMode,
+                this._groupSpec, GroupRelationSpec);
+            joinsList.push(join);
+
+            sortList.push(LibraryDatabase._makeSort(viewName, sortPropName,
+                sortProp.sortMode, this._groupSpec, GroupRelationSpec));
+          };
+
+          switch (propName) {
+            case 'person':
+            case 'persons': {
+              await makePersonJoin();
+            } break;
+
+            case 'author':
+            case 'authors': {
+              await makePersonJoin();
+              where.add('relation',
+                  PersonRelationSpec.prop('relation').toDb(PersonRelation.Author));
+            } break;
+
+            case 'group':
+            case 'groups': {
+              await makeGroupJoin();
+            } break;
+
+            case 'tag':
+            case 'tags': {
+              await makeGroupJoin();
+              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Tag));
+            } break;
+
+            case 'lang':
+            case 'langs': {
+              await makeGroupJoin();
+              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Language));
+            } break;
+
+            case 'category':
+            case 'categories': {
+              await makeGroupJoin();
+              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Category));
+            } break;
+
+            case 'series': {
+              await makeGroupJoin();
+              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Series));
+            } break;
+
+            default: {
+              // assume this is a plain property name
+              if (propExtra) {
+                throw new Error(`Invalid sort option: no idea what "${propName} is`);
+              } else if (hashIndex >= 0 || !ResourceSpec.propSupported(propName)) {
+                throw new Error(`Invalid sort option: cannot find a property named ${sortProp.propName}`);
+              }
+
+              sortList.push(LibraryDatabase._makeSort(null, propName,
+                  sortProp.sortMode, ResourceSpec));
+            }
+          }
+        }
+      }
+
+      sort = 'ORDER BY ' + sortList.join(', ');
+      joins = joinsList.join(' ');
+    } else {
+      joins = '';
+      let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
+      sort = 'ORDER BY ' + LibraryDatabase._makeSort(null, 'titleSort', mode, ResourceSpec);
+    }
+
+    let query: string;
+    if (joins) {
+      query = `SELECT resources.* FROM resources ${joins} ${where.clause} ${sort} ${limits}`;
+    } else {
+      query = `SELECT * FROM resources ${where.clause} ${sort} ${limits}`;
+    }
+
+    let rows = await this.db.all(query, where.bound);
     return rows.map((row: any): Group => ResourceSpec.rowToEntry(row));
   }
 
@@ -488,7 +615,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
           relationField.toDb(relation));
     }
 
-    let limits = LibraryDatabase._limits(PersonSpec.prop('nameSort').column, options);
+    let limits = LibraryDatabase._limits('nameSort', options, PersonSpec);
 
     let rows = await this.db.all(`SELECT * FROM persons ${where.clause} ${limits}`, where.bound);
     return rows.map(row => PersonSpec.rowToEntry(row));
@@ -586,7 +713,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       where.add(groupTypeField.column, groupTypeField.toDb(groupType));
     }
 
-    let limits = LibraryDatabase._limits(this._groupSpec.prop('titleSort').column, options);
+    let limits = LibraryDatabase._limits('titleSort', options, this._groupSpec);
 
     let rows = await this.db.all(`SELECT * FROM groups ${where.clause} ${limits}`, where.bound);
     return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
@@ -687,10 +814,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
     }
 
-    let limits = LibraryDatabase._limits(PersonSpec.prop('nameSort').column, options);
+    let limits = LibraryDatabase._limits('nameSort', options, PersonSpec, PersonRelationSpec);
 
     let rows: any[] = await this.db.all(
-        `SELECT relation, uuid, name, name_sort FROM res_to_persons LEFT JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause} ${limits}`,
+        `SELECT relation, uuid, name, name_sort FROM res_to_persons INNER JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause} ${limits}`,
         whereClause.bound);
 
     let results: RelatedPerson[] = [];
@@ -824,11 +951,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
     }
 
-    let limits = LibraryDatabase._limits(this._groupSpec.prop('titleSort').column, options);
+    let limits = LibraryDatabase._limits('titleSort', options, this._groupSpec, GroupRelationSpec);
 
     let rows: any[] =
         await this.db.all(`SELECT group_index, relation_tag, uuid, type, title, title_sort FROM res_to_groups ` +
-        `LEFT JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause} ${limits}`,
+        `INNER JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause} ${limits}`,
         whereClause.bound);
 
     let results: RelatedGroup[] = [];
@@ -852,7 +979,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       whereClause.add('tag', ObjectSpec.prop('tag').toDb(tag));
     }
 
-    let limits = LibraryDatabase._limits(ObjectSpec.prop('tag').column, options);
+    let limits = LibraryDatabase._limits('tag', options, ObjectSpec);
 
     let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag ` +
                                   `FROM objects ${whereClause.clause} ${limits}`,
@@ -993,16 +1120,88 @@ export class LibraryDatabase extends DatabaseWithOptions {
     await this.db.run(`DELETE FROM ${spec.table} WHERE uuid = ?`, [ uuid ]);
   }
 
-  protected static _limits(sortColumn: string, options?: ListOptions): string {
-    let resultParts: string[] = [];
+  protected async _makeForeignSortJoin(sortProp: string, sortMode: SortMode, tableSpec: EntrySpec,
+                                       tableLinksSpec: EntrySpec): Promise<string[]> {
+    let modeText = sortMode === SortMode.Desc ? 'DESC' : 'ASC';
+    let sortColumn: string;
+    if (tableSpec.propSupported(sortProp)) {
+      sortColumn = tableSpec.prop(sortProp).column;
+    } else if (tableLinksSpec.propSupported(sortProp)) {
+      sortColumn = tableLinksSpec.prop(sortProp).column;
+    } else {
+      throw new Error(`Cannot find a column to match a sorting property ${sortProp}`);
+    }
+    let viewName = `res_${tableSpec.table}_${modeText.toLowerCase()}_${sortColumn}`;
 
-    let mode: string = 'ASC';
-    if (options && options.sort != null && typeof options.sort === 'number') {
-      if (options.sort === SortMode.Desc) {
-        mode = 'DESC';
+    function fieldMapper(field: FieldSpec): string {
+      if (field.prop === sortProp) {
+        let sortFunc = sortMode === SortMode.Desc ? 'max' : 'min';
+        return `${sortFunc}(${field.column}) as ${field.column}`;
+      } else if (field.prop === 'uuid') {
+        return '';
+      } else {
+        return field.column;
       }
     }
-    resultParts.push(`ORDER BY ${sortColumn} COLLATE NOCASE ${mode}`);
+
+    let linkField = tableLinksSpec.linkColumn(tableSpec);
+    if (!linkField) {
+      throw new Error();
+    }
+
+    let colList = [ ...tableSpec.fieldSpecs.map(fieldMapper), ...tableLinksSpec.fieldSpecs.map(fieldMapper) ]
+        .filter(x => !!x);
+    colList.push('res_id');
+    colList.push(linkField);
+    let columns = colList.join(', ');
+
+    let viewCreateQuery = `CREATE VIEW IF NOT EXISTS ${viewName} AS SELECT ${columns} FROM ${tableSpec.table} INNER JOIN ${tableLinksSpec.table} ON ${tableSpec.table}.uuid = ${tableLinksSpec.table}.${linkField} GROUP BY res_id`;
+
+    await this._db.exec(viewCreateQuery);
+
+    return [`INNER JOIN ${viewName} ON uuid = res_id`, viewName];
+  }
+
+  protected static _makeSort(tableName: string|null, sortProp: string, mode: SortMode,
+                      ...specs: EntrySpec[]): string {
+    let columnName: string|null = null;
+    for (let spec of specs) {
+      if (spec.propSupported(sortProp)) {
+        columnName = spec.prop(sortProp).column;
+        break;
+      }
+    }
+    if (columnName == null) {
+      throw new Error(`Cannot find a column to match a sorting property ${sortProp}`);
+    }
+
+    let sortMode = mode === SortMode.Desc ? 'DESC' : 'ASC';
+
+    let tablePrefix = tableName ? tableName + '.' : '';
+
+    return `${tablePrefix}${columnName} COLLATE NOCASE ${sortMode}`;
+  }
+
+  protected static _limits(prefSortProp: string, options?: ListOptions, ...specs: EntrySpec[]): string {
+    let resultParts: string[] = [];
+
+    if (specs.length > 0) {
+      let sortParts: string[] = [];
+      if (options && options.sortProps && options.sortProps.length > 0) {
+        for (let sortProp of options.sortProps) {
+          if (sortProp.propName) {
+            sortParts.push(this._makeSort(null, sortProp.propName, sortProp.sortMode, ...specs))
+          }
+        }
+      }
+
+      if (!sortParts.length) {
+        let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
+        sortParts.push(this._makeSort(null, prefSortProp, mode, ...specs));
+      }
+
+      resultParts.push('ORDER BY ' + sortParts.join(', '));
+    }
 
     if (options && options.maxCount != null && typeof options.maxCount === 'number'
         && options.maxCount >= 0) {
@@ -1052,12 +1251,23 @@ namespace PropValidators {
 
 class EntrySpec {
   constructor(protected _table: string, protected _human: string, protected _fieldSpecs: FieldSpec[],
-              protected _id: string = 'uuid') { }
+              protected _id: string = 'uuid', protected _keys: { [name: string]: string } = {}) { }
 
   get fieldSpecs(): FieldSpec[] { return this._fieldSpecs; }
   get table(): string { return this._table; }
   get human(): string { return this._human; }
   get id(): string { return this._id; }
+
+  linkColumn(table: EntrySpec): string|null {
+    if (this._keys) {
+      for (let key of Object.keys(this._keys)) {
+        if (this._keys[key] === table.table) {
+          return key;
+        }
+      }
+    }
+    return null;
+  }
 
   prop(propName: string): FieldSpec {
     let found = this._fieldSpecs.find(spec => spec.prop === propName);
@@ -1276,7 +1486,10 @@ const GroupTypeSpec = new EntrySpec('group_types', 'group type', [
 
 const PersonRelationSpec = new EntrySpec('res_to_persons', 'person relation', [
     new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number)
-]);
+], undefined, {
+  res_id: 'resources',
+  person_id: 'persons'
+});
 
 const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
   new GenericFieldSpec('groupIndex', 'group_index',
@@ -1284,12 +1497,15 @@ const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
       PropValidators.Number,
       (value: any): any => value == null ? -1 : value,
       (value: any): any => value < 0 ? null : value),
-    new GenericFieldSpec('relationTag', 'relation_tag',
-        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
-        PropValidators.String,
-        (value: any): any => value == null ? '' : value,
-        (value: any): any => value == null ? null : value)
-]);
+  new GenericFieldSpec('relationTag', 'relation_tag',
+      PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+      PropValidators.String,
+      (value: any): any => value == null ? '' : value,
+      (value: any): any => value == null ? null : value)
+], undefined, {
+  res_id: 'resources',
+  group_id: 'groups'
+});
 
 /**
  * This function only exists because of TypeScript bug preventing from using object spread operator in form

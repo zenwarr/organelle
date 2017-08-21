@@ -54,6 +54,49 @@ describe("LibraryServer", function () {
         .end(done);
   });
 
+  it("should support pagination of resources", function (done) {
+    supertest(server.server)
+        .get('/resources?offset=1&count=3')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(3);
+        })
+        .end(done);
+  });
+
+  it("should support sorting resources", function (done) {
+    supertest(server.server)
+        .get('/resources?sort=+titleSort')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(testlib.RES_COUNT);
+          expect(resp.body[0].uuid).to.be.equal(testlib.WAR);
+        })
+        .end(done);
+  });
+
+  it("should support sorting resource in reverse order", function (done) {
+    supertest(server.server)
+        .get('/resources?sort=-titleSort')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(testlib.RES_COUNT);
+          expect(resp.body[0].uuid).to.be.equal(testlib.ULYSSES);
+        })
+        .end(done);
+  });
+
+  it("should support default sorting", function (done) {
+    supertest(server.server)
+        .get('/resources?sort=-')
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.have.lengthOf(testlib.RES_COUNT);
+          expect(resp.body[0].uuid).to.be.equal(testlib.ULYSSES);
+        })
+        .end(done);
+  });
+
   it("should list all authors", function (done) {
     supertest(server.server)
         .get('/authors/')
