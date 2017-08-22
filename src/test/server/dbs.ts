@@ -944,6 +944,56 @@ describe('dbs', function() {
           expect(resources.map(x => x.uuid)).to.be.deep.equal([TOLL, MOCKINGBIRD, MIST]);
         });
 
+        it("should sort by two foreign properties", async function () {
+          const BOOK1 = uuid.v4(), BOOK2 = uuid.v4(), BOOK3 = uuid.v4();
+
+          await db.addResource({
+            uuid: BOOK1,
+            title: 'First Book',
+            titleSort: 'First Book'
+          });
+
+          await db.addResource({
+            uuid: BOOK2,
+            title: 'Second Book',
+            titleSort: 'Second Book'
+          });
+
+          await db.addResource({
+            uuid: BOOK3,
+            title: 'Third Book',
+            titleSort: 'Third Book'
+          });
+
+          await db.addPersonRelation(BOOK1, PERSON1, PersonRelation.Author);
+          await db.addPersonRelation(BOOK2, PERSON1, PersonRelation.Author);
+          await db.addPersonRelation(BOOK3, PERSON1, PersonRelation.Author);
+
+          let series = await db.addGroup({
+            title: 'Some Series',
+            titleSort: 'Some Series',
+            groupType: KnownGroupTypes.Series
+          });
+          await db.addGroupRelation(MIST, series.uuid as string, 1);
+          await db.addGroupRelation(MOCKINGBIRD, series.uuid as string, 2);
+          await db.addGroupRelation(BOOK1, series.uuid as string, 2);
+          await db.addGroupRelation(BOOK2, series.uuid as string, 2);
+          await db.addGroupRelation(BOOK3, series.uuid as string, 2);
+          await db.addGroupRelation(TOLL, series.uuid as string, 3);
+
+          let resources = await db.findResources({
+            sortProps: [{
+              propName: 'series#groupIndex',
+              sortMode: SortMode.Desc
+            }, {
+              propName: 'authors#nameSort',
+              sortMode: SortMode.Asc
+            }]
+          });
+
+          expect(resources.map(x => x.uuid)).to.be.deep.equal([TOLL, MOCKINGBIRD, BOOK1, BOOK2, BOOK3, MIST])
+        });
+
         it("should still sort resources by a non-foreign properties", async function () {
           let resources = await db.findResources({
             sortProps: [{
@@ -953,6 +1003,19 @@ describe('dbs', function() {
           });
 
           expect(resources.map(x => x.uuid)).to.be.deep.equal([MIST, MOCKINGBIRD, TOLL]);
+        });
+
+        it("should sort resources by author not taking other persons into account", async function () {
+          await db.addPersonRelation(MOCKINGBIRD, A_PERSON, PersonRelation.Editor);
+
+          let resources = await db.findResources({
+            sortProps: [{
+              propName: 'authors#nameSort',
+              sortMode: SortMode.Asc
+            }]
+          });
+
+          expect(resources.map(x => x.uuid)).to.be.deep.equal([ TOLL, MIST, MOCKINGBIRD ]);
         });
       });
     });

@@ -106,6 +106,11 @@ export enum PersonRelation {
 
 const RELATION_NAMES: string[] = [ 'author', 'editor', 'translator' ];
 
+/**
+ * Converts a member of PersonRelation enum to string representation suitable for transferring values.
+ * @param {PersonRelation} relation Relation value
+ * @returns {string} String representation
+ */
 export function personRelationToString(relation: PersonRelation): string {
   --relation;
   if (relation >= 0 && relation < RELATION_NAMES.length) {
@@ -115,6 +120,11 @@ export function personRelationToString(relation: PersonRelation): string {
   }
 }
 
+/**
+ * Converts string representation of PersonRelation back to enumeration member.
+ * @param {string} text String representation of the value
+ * @returns {PersonRelation} Enumeration value
+ */
 export function personRelationFromString(text: string): PersonRelation {
   let index = RELATION_NAMES.indexOf(text.toLowerCase().trim());
   if (index >= 0) {
@@ -281,10 +291,34 @@ export interface SortProp {
   sortMode: SortMode;
 }
 
+/**
+ * Object describing sorting and pagination options.
+ */
 export interface ListOptions {
+  /**
+   * Zero-based offset of the first item in results to return.
+   */
   offset?: number;
+
+  /**
+   * Max number of items to return.
+   */
   maxCount?: number;
+
+  /**
+   * Sorting options.
+   * Each item is this array describes which properties should be used for sorting.
+   * By default, items are sorted by some default property: resources are sorted by titleSort, persons — by titleSort, etc.
+   * These options are applied in the same order as they come in the array: first item is going to be in the first ORDER BY, second one is going to be the second, etc.
+   * Default sorting property will come after all the properties in this array.
+   * But if you've already explicitly used the default sorting property in the list, it will not be appended.
+   */
   sortProps?: SortProp[];
+
+  /**
+   * Order for default sorting.
+   * This order is applied to default sort property (in case there are no sortProps or default sort property is automatically appended to sortProps)
+   */
   prefSortMode?: SortMode;
 }
 
@@ -316,6 +350,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
               role INTEGER NOT NULL, tag TEXT,
               UNIQUE(res_id, uuid, role, tag),
               FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
+        `CREATE VIEW res_to_groups_view AS SELECT title, title_sort, type, group_index, relation_tag, res_id,
+              group_id FROM groups INNER JOIN res_to_groups ON groups.uuid = group_id`,
+        `CREATE VIEW res_to_persons_view AS SELECT name, name_sort, relation, res_id, person_id
+              FROM persons INNER JOIN res_to_persons ON persons.uuid = person_id`
+
     ];
 
     for (let query of SCHEMA) {
@@ -442,19 +481,29 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return this._removeEntry(Database.getId(resource), ResourceSpec);
   }
 
+  /**
+   * Get list of resources matching given criteria.
+   * It is possible to sort matched resources not only by title and other field of Resource object, but by foreign keys.
+   * For example, it is possible to sort resource by author.
+   * You can do it by providing values in a special form to options.sortProps.propName.
+   * To sort resource by author name, you can just give "authors" as value for options.sortProps.propName, and resources will be sorted by nameSort property of related authors.
+   * Resources that have multiple authors, are going to be properly sorted: only author that comes first in alphabetical order will be taken into account while sorting resources in ascending order.
+   * You can also sort resources by properties of related persons or groups.
+   * For example: groups#relationTag is going to sort resources by relationTag of linked groups.
+   * When part after hash sign (#) is missing, default sorting for the table will be used.
+   * You can use the following pseudo-tables for sorting:
+   * [ person, author, group, lang, category, tag, series ]
+   * @param {ListOptions} options Sorting and pagination options
+   * @returns {Promise<Resource[]>} List of resources matching the request.
+   */
   async findResources(options?: ListOptions): Promise<Resource[]> {
     let where = new WhereClauseBuilder();
 
     let limits = LibraryDatabase._limits('titleSort', { ...options, sortProps: [] });
 
-    // resource queries can have extra sorting options, we can sort resource by foreign fields,
-    // for example, sort resources by author names. To sort results by a foreign field,
-    // options.sortProps.propName should be in the following form: author#nameSort, where author is
-    // one of predefined names for sorting and nameSort is property name.
-
-    // so we need custom sort options processing
     let joins: string = '', sort: string, sortList: string[] = [];
     if (options && options.sortProps && options.sortProps.length > 0) {
+      // if we have sort options specified
       let joinsList: string[] = [];
 
       for (let sortProp of options.sortProps) {
@@ -463,28 +512,50 @@ export class LibraryDatabase extends DatabaseWithOptions {
           let propName = hashIndex >= 0 ? sortProp.propName.slice(0, hashIndex) : sortProp.propName;
           let propExtra = hashIndex >= 0 ? sortProp.propName.slice(hashIndex + 1) : '';
 
+          let joinWhere = new WhereClauseBuilder();
+
+          let personsJoined = false;
           const makePersonJoin = async () => {
             let sortPropName = propExtra ? propExtra : 'nameSort';
 
-            let [join, viewName] = await this._makeForeignSortJoin(sortPropName, sortProp.sortMode,
-                PersonSpec, PersonRelationSpec);
-            joinsList.push(join);
+            if (!personsJoined) {
+              let columns = this._makeForeignSortJoinColumns(sortPropName, sortProp.sortMode, 'person_id',
+                  PersonSpec, PersonRelationSpec);
 
-            sortList.push(LibraryDatabase._makeSort(viewName, sortPropName,
-                sortProp.sortMode, PersonSpec, PersonRelationSpec));
+              let join = `INNER JOIN (SELECT ${columns} FROM res_to_persons_view ${joinWhere.clause} GROUP BY res_id) persons_join ON resources.uuid = persons_join.res_id`;
+              joinsList.push(join);
+
+              personsJoined = true;
+            }
+
+            sortList.push(LibraryDatabase._makeSort('persons_join', sortPropName, sortProp.sortMode,
+                PersonSpec, PersonRelationSpec));
           };
 
+          let groupsJoined = false;
           const makeGroupJoin = async () => {
             let sortPropName = propExtra ? propExtra : 'titleSort';
 
-            let [join, viewName] = await this._makeForeignSortJoin(sortPropName, sortProp.sortMode,
-                this._groupSpec, GroupRelationSpec);
-            joinsList.push(join);
+            if (!groupsJoined) {
+              let columns = this._makeForeignSortJoinColumns(sortPropName, sortProp.sortMode, 'group_id',
+                  this._groupSpec, GroupRelationSpec);
 
-            sortList.push(LibraryDatabase._makeSort(viewName, sortPropName,
-                sortProp.sortMode, this._groupSpec, GroupRelationSpec));
+              let join = `INNER JOIN (SELECT ${columns} FROM res_to_groups_view ${joinWhere.clause} GROUP BY res_id) groups_join ON resources.uuid = groups_join.res_id`;
+              joinsList.push(join);
+
+              groupsJoined = true;
+            }
+
+            sortList.push(LibraryDatabase._makeSort('groups_join', sortPropName, sortProp.sortMode,
+                this._groupSpec, GroupRelationSpec));
           };
 
+          const addJoinWhere = (propName: string, value: any) => {
+            where.add(propName, value);
+            joinWhere.add(propName, value);
+          };
+
+          // which pseudo-table we should use?
           switch (propName) {
             case 'person':
             case 'persons': {
@@ -493,9 +564,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
             case 'author':
             case 'authors': {
-              await makePersonJoin();
-              where.add('relation',
+              addJoinWhere('relation',
                   PersonRelationSpec.prop('relation').toDb(PersonRelation.Author));
+              await makePersonJoin();
             } break;
 
             case 'group':
@@ -505,25 +576,25 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
             case 'tag':
             case 'tags': {
+              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Tag));
               await makeGroupJoin();
-              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Tag));
             } break;
 
             case 'lang':
             case 'langs': {
+              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Language));
               await makeGroupJoin();
-              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Language));
             } break;
 
             case 'category':
             case 'categories': {
+              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Category));
               await makeGroupJoin();
-              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Category));
             } break;
 
             case 'series': {
+              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Series));
               await makeGroupJoin();
-              where.add('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Series));
             } break;
 
             default: {
@@ -534,8 +605,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
                 throw new Error(`Invalid sort option: cannot find a property named ${sortProp.propName}`);
               }
 
-              sortList.push(LibraryDatabase._makeSort(null, propName,
-                  sortProp.sortMode, ResourceSpec));
+              sortList.push(LibraryDatabase._makeSort(null, propName, sortProp.sortMode, ResourceSpec));
             }
           }
         }
@@ -544,21 +614,22 @@ export class LibraryDatabase extends DatabaseWithOptions {
       joins = joinsList.join(' ');
     }
 
-    // add default sorting by title if no options or resources were not sorted by title
+    // if we have no sorting options, we should sort by resource name by default.
+    // also, we need to add sorting by title to the end of sorting options, for resources
+    // with equal author names (or whatever we sort by) to be sorted in some way.
     if (!options || !options.sortProps ||
         !options.sortProps.some(sortProp => sortProp.propName === 'titleSort')) {
       let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
-      sortList.push(LibraryDatabase._makeSort(null, 'titleSort',
-          mode, ResourceSpec));
+      sortList.push(LibraryDatabase._makeSort(null,'titleSort', mode, ResourceSpec));
     }
 
     sort = 'ORDER BY ' + sortList.join(', ');
 
     let query: string;
     if (joins) {
-      query = `SELECT resources.* FROM resources ${joins} ${where.clause} ${sort} ${limits}`;
+      query = `SELECT resources.* FROM resources ${joins} ${sort} ${limits}`;
     } else {
-      query = `SELECT * FROM resources ${where.clause} ${sort} ${limits}`;
+      query = `SELECT * FROM resources ${sort} ${limits}`;
     }
 
     let rows = await this.db.all(query, where.bound);
@@ -602,6 +673,18 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return this._removeEntry(Database.getId(person), PersonSpec);
   }
 
+  /**
+   * Get list of persons matching specified criteria.
+   * All arguments act like it would linked with AND logical operator.
+   * For example, if you specify both name and relations, only persons with given name AND relation are going to be returned.
+   * Use the function without arguments to get list of all persons registered in the database.
+   * @param {string} name Persons with name or nameSort equal to the given value are going to be included in result set.
+   * If omitted, name is not important.
+   * @param {PersonRelation} relation Get persons that are related to at least one resource with given relation.
+   * If omitted, relations are not taken into account.
+   * @param {ListOptions} options Sorting and pagination options
+   * @returns {Promise<Person[]>}
+   */
   async findPersons(name?: string, relation?: PersonRelation, options?: ListOptions): Promise<Person[]> {
     let where = new WhereClauseBuilder();
 
@@ -625,10 +708,22 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return rows.map(row => PersonSpec.rowToEntry(row));
   }
 
+  /**
+   * Shorthand for searching persons with given relation.
+   * @param {string} name Name of persons to search.
+   * @returns {Promise<Person[]>}
+   */
   findAuthors(name?: string): Promise<Person[]> {
     return this.findPersons(name, PersonRelation.Author);
   }
 
+  /**
+   * Shorthand for searching persons with given name.
+   * Only the first matched person will be returned.
+   * It is undefined which object is going to be returned if there are two or more persons with same name.
+   * @param {string} name Name of person to search.
+   * @returns {Promise<Person>}
+   */
   async findPerson(name: string): Promise<Person|null> {
     let persons = await this.findPersons(name);
     return persons.length > 0 ? persons[0] : null;
@@ -653,6 +748,12 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return await this._addEntry<NewGroup>(group, this._groupSpec) as Group;
   }
 
+  /**
+   * Shorthand for adding a tag with given text.
+   * @param {string} text Tag text
+   * @param {string} textSort Tag sort text
+   * @returns {Promise<Group>} Group object
+   */
   async addTag(text: string, textSort?: string): Promise<Group> {
     return this.addGroup({
       title: text,
@@ -661,6 +762,12 @@ export class LibraryDatabase extends DatabaseWithOptions {
     });
   }
 
+  /**
+   * Shorthand for adding a category with given text.
+   * @param {string} text Category text
+   * @param {string} textSort Category sort text
+   * @returns {Promise<Group>} Group object
+   */
   async addCategory(text: string, textSort?: string): Promise<Group> {
     return this.addGroup({
       title: text,
@@ -669,6 +776,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
     });
   }
 
+  /**
+   * Shorthand for adding a language with given text.
+   * @param {string} code Lang code (should be ISO-639 code)
+   * @returns {Promise<Group>} Group object
+   */
   async addLang(code: string): Promise<Group> {
     return this.addGroup({
       title: code.toLowerCase(),
@@ -677,6 +789,12 @@ export class LibraryDatabase extends DatabaseWithOptions {
     });
   }
 
+  /**
+   * Shorthand for adding a series with given title.
+   * @param {string} title Series title
+   * @param {string} titleSort Series sort title
+   * @returns {Promise<Group>} Group object
+   */
   async addSeries(title: string, titleSort?: string): Promise<Group> {
     return this.addGroup({
       title: title,
@@ -685,22 +803,51 @@ export class LibraryDatabase extends DatabaseWithOptions {
     });
   }
 
+  /**
+   * Creates a tag with given text if no tag exist, or returns already existing tag with given text.
+   * @param {string} text Tag text
+   * @returns {Promise<Group>} Group object
+   */
   async tag(text: string): Promise<Group> {
     return await this.findGroup(text, KnownGroupTypes.Tag) || await this.addTag(text);
   }
 
+  /**
+   * Creates a language with given text if no lang exist, or returns already existing lang with given text.
+   * @param {string} code Language code (should be ISO-639 code)
+   * @returns {Promise<Group>} Group object
+   */
   async lang(code: string): Promise<Group> {
     return await this.findGroup(code.toLowerCase(), KnownGroupTypes.Language) || await this.addLang(code);
   }
 
+  /**
+   * Creates a category with given text if no category exist, or returns already existing category with given text.
+   * @param {string} text Category text
+   * @returns {Promise<Group>} Group object
+   */
   async category(text: string): Promise<Group> {
     return await this.findGroup(text, KnownGroupTypes.Category) || await this.addCategory(text);
   }
 
+  /**
+   * Creates a series with given text if no series exist, or returns already existing series with given text.
+   * @param {string} text Series text
+   * @returns {Promise<Group>} Group object
+   */
   async series(text: string): Promise<Group> {
     return await this.findGroup(text, KnownGroupTypes.Series) || await this.addSeries(text);
   }
 
+  /**
+   * Returns list of groups matching given criteria.
+   * All arguments act like it would linked with AND logical operator.
+   * Use the function without arguments to get list of all groups registered in the database.
+   * @param {string} text Groups with title or titleSort equal to this value are going to be included in result set.
+   * @param {GroupType | string} groupType Groups with given group type are going to be included in result set.
+   * @param {ListOptions} options Sorting and pagination options.
+   * @returns {Promise<Group[]>} List of groups matching request.
+   */
   async findGroups(text?: string, groupType?: GroupType|string, options?: ListOptions): Promise<Group[]> {
     let where = new WhereClauseBuilder();
 
@@ -723,25 +870,53 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
   }
 
+  /**
+   * Shorthand for searching groups.
+   * Only the first group is returned.
+   * If there are two or more groups with the same name, it is undefined which one is going to be returned by the function.
+   * @param {string} text Group text (or sort text)
+   * @param {GroupType | string} groupType group type
+   * @returns {Promise<Group>}
+   */
   async findGroup(text?: string, groupType?: GroupType|string): Promise<Group|null> {
     let groups = await this.findGroups(text, groupType);
     return groups.length > 0 ? groups[0] : null;
   }
 
+  /**
+   * Shorthand for searching tags with given text.
+   * @param {string} text Tag text or sort text.
+   * @returns {Promise<Group[]>} List of found tags
+   */
   findTags(text?: string): Promise<Group[]> {
     return this.findGroups(text, KnownGroupTypes.Tag);
   }
 
+  /**
+   * Shorthand for searching categories with given text.
+   * @param {string} text Category text or sort text
+   * @returns {Promise<Group[]>} List of found categories.
+   */
   findCategories(text?: string): Promise<Group[]> {
     return this.findGroups(text, KnownGroupTypes.Category);
   }
 
+  /**
+   * Shorthand for searching series with given text
+   * @param {string} text Series text or sort text
+   * @returns {Promise<Group[]>} List of found series.
+   */
   findSeries(text?: string): Promise<Group[]> {
     return this.findGroups(text, KnownGroupTypes.Series);
   }
 
+  /**
+   * Shorthand for searching languages with given text.
+   * @param {string} code Language code
+   * @returns {Promise<Group[]>} List of found languages.
+   */
   findLangs(code?: string): Promise<Group[]> {
-    return this.findGroups(code, KnownGroupTypes.Language);
+    return this.findGroups(code ? code.toLowerCase() : code, KnownGroupTypes.Language);
   }
 
   /**
@@ -882,14 +1057,41 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return relGroup;
   }
 
+  /**
+   * Shorthand for creating a relation between a resource and a tag group.
+   * If no tag with given text exist, new one is going to be created.
+   * @param {Resource | string} resource A resource to add the tag to
+   * @param {string} tagText Tag text
+   * @returns {Promise<RelatedGroup>} New group relation.
+   */
   async addTagToResource(resource: Resource|string, tagText: string): Promise<RelatedGroup> {
     return this.addGroupRelation(resource, await this.tag(tagText));
   }
 
+  /**
+   * Shorthand for creating a relation between a resource and a lang group.
+   * If no lang with given code exist, new one is going to be created.
+   * @param {Resource | string} resource A resource to add the lang to
+   * @param {string} langCode Language code
+   * @param {boolean} original If the language is the language the book was written in, set this value to true.
+   * Otherwise, specify false.
+   * This information is stored in relationTag property.
+   * @returns {Promise<RelatedGroup>}
+   */
   async addLangToResource(resource: Resource|string, langCode: string, original?: boolean): Promise<RelatedGroup> {
     return this.addGroupRelation(resource, await this.lang(langCode), undefined, original);
   }
 
+  /**
+   * Shorthand for creating a relation between a resource and a series.
+   * If no series with given text exist, new one is going to be created.
+   * @param {Resource | string} resource A resource to add a series to.
+   * @param {string} seriesName Series text
+   * @param {number} seriesIndex Index of the book inside the series.
+   * @param {string} comment You can leave a comment for the relation.
+   * This information is stored in relationTag property.
+   * @returns {Promise<RelatedGroup>}
+   */
   async addSeriesToResource(resource: Resource|string, seriesName: string,
                             seriesIndex: number, comment?: string): Promise<RelatedGroup> {
     return this.addGroupRelation(resource, await this.series(seriesName), seriesIndex, comment);
@@ -935,6 +1137,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {string} resource UUID of a resource
    * @param {GroupType} groupType If specified, only relations with groups of the specified type will be returned.
    * If not specified, all relations regardless of type will be returned.
+   * @param options Sorting and pagination options.
    * @returns {Promise<RelatedGroup[]>}
    */
   async relatedGroups(resource: Resource|string, groupType?: GroupType|string,
@@ -972,6 +1175,14 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return results;
   }
 
+  /**
+   * Get list of object a resource relates to.
+   * @param {Resource | string} resource UUID of a resource
+   * @param {ObjectRole} role If specified, only relations with specified role will be returned.
+   * @param {string} tag If specified, only relations with specified tag will be returned.
+   * @param {ListOptions} options Sorting and pagination options.
+   * @returns {Promise<RelatedObject[]>}
+   */
   async relatedObjects(resource: Resource|string, role?: ObjectRole, tag?: string, options?: ListOptions): Promise<RelatedObject[]> {
     let whereClause = new WhereClauseBuilder();
 
@@ -992,6 +1203,12 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return rows.map(row => ObjectSpec.rowToEntry<RelatedObject>(row));
   }
 
+  /**
+   * Adds an object relation to a resource.
+   * @param {Resource | string} resource A resource to add relation to.
+   * @param {RelatedObject} obj An object to relate to.
+   * @returns {Promise<RelatedObject>} New relation object.
+   */
   async addObjectRelation(resource: Resource|string, obj: RelatedObject): Promise<RelatedObject> {
     resource = Database.getId(resource);
     let objectUuid = Database.validateId(obj.uuid);
@@ -1003,6 +1220,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return { ...obj, rowId: result.lastID, resourceUuid: resource };
   }
 
+  /**
+   * Updates object relation.
+   * @param {RelatedObject} obj RelatedObject to be update
+   * @returns {Promise<void>}
+   */
   async updateObjectRelation(obj: RelatedObject): Promise<void> {
     if (obj.rowId == null) {
       throw new Error('Cannot update an object relation: rowId is invalid');
@@ -1023,6 +1245,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
   }
 
+  /**
+   * Removes a relation between a resource and an object
+   * @param {RelatedObject} obj Related object to remove.
+   * @returns {Promise<void>}
+   */
   async removeObjectRelation(obj: RelatedObject): Promise<void> {
     if (obj.rowId == null) {
       throw new Error('Cannot remove object relation: rowId is invalid');
@@ -1124,19 +1351,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
     await this.db.run(`DELETE FROM ${spec.table} WHERE uuid = ?`, [ uuid ]);
   }
 
-  protected async _makeForeignSortJoin(sortProp: string, sortMode: SortMode, tableSpec: EntrySpec,
-                                       tableLinksSpec: EntrySpec): Promise<string[]> {
-    let modeText = sortMode === SortMode.Desc ? 'DESC' : 'ASC';
-    let sortColumn: string;
-    if (tableSpec.propSupported(sortProp)) {
-      sortColumn = tableSpec.prop(sortProp).column;
-    } else if (tableLinksSpec.propSupported(sortProp)) {
-      sortColumn = tableLinksSpec.prop(sortProp).column;
-    } else {
-      throw new Error(`Cannot find a column to match a sorting property ${sortProp}`);
-    }
-    let viewName = `res_${tableSpec.table}_${modeText.toLowerCase()}_${sortColumn}`;
-
+  protected _makeForeignSortJoinColumns(sortProp: string, sortMode: SortMode, linkField: string,
+                                        tableSpec: EntrySpec, tableLinksSpec: EntrySpec): string {
     function fieldMapper(field: FieldSpec): string {
       if (field.prop === sortProp) {
         let sortFunc = sortMode === SortMode.Desc ? 'max' : 'min';
@@ -1148,26 +1364,14 @@ export class LibraryDatabase extends DatabaseWithOptions {
       }
     }
 
-    let linkField = tableLinksSpec.linkColumn(tableSpec);
-    if (!linkField) {
-      throw new Error();
-    }
-
-    let colList = [ ...tableSpec.fieldSpecs.map(fieldMapper), ...tableLinksSpec.fieldSpecs.map(fieldMapper) ]
+    let columns = [ ...tableSpec.fieldSpecs.map(fieldMapper), ...tableLinksSpec.fieldSpecs.map(fieldMapper) ]
         .filter(x => !!x);
-    colList.push('res_id');
-    colList.push(linkField);
-    let columns = colList.join(', ');
-
-    let viewCreateQuery = `CREATE VIEW IF NOT EXISTS ${viewName} AS SELECT ${columns} FROM ${tableSpec.table} INNER JOIN ${tableLinksSpec.table} ON ${tableSpec.table}.uuid = ${tableLinksSpec.table}.${linkField} GROUP BY res_id`;
-
-    await this._db.exec(viewCreateQuery);
-
-    return [`INNER JOIN ${viewName} ON uuid = res_id`, viewName];
+    columns.push('res_id');
+    columns.push(linkField);
+    return columns.join(', ');
   }
 
-  protected static _makeSort(tableName: string|null, sortProp: string, mode: SortMode,
-                      ...specs: EntrySpec[]): string {
+  protected static _makeSort(table: string|null, sortProp: string, mode: SortMode, ...specs: EntrySpec[]): string {
     let columnName: string|null = null;
     for (let spec of specs) {
       if (spec.propSupported(sortProp)) {
@@ -1181,8 +1385,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     let sortMode = mode === SortMode.Desc ? 'DESC' : 'ASC';
 
-    let tablePrefix = tableName ? tableName + '.' : '';
-
+    let tablePrefix = table ? table + '.' : '';
     return `${tablePrefix}${columnName} COLLATE NOCASE ${sortMode}`;
   }
 
@@ -1199,7 +1402,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
         }
       }
 
-      if (!sortParts.length) {
+      if (!sortParts.length || !options || !options.sortProps ||
+          !options.sortProps.some(sortProp => sortProp.propName === prefSortProp)) {
         let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
         sortParts.push(this._makeSort(null, prefSortProp, mode, ...specs));
       }
