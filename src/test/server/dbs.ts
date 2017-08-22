@@ -840,6 +840,41 @@ describe('dbs', function() {
         expect(resources.map(x => x.uuid)).to.be.deep.equal([ MIST, MOCKINGBIRD, TOLL ]);
       });
 
+      it("should sort resources with same author by resource name", async function () {
+        const BOOK1 = uuid.v4(), BOOK2 = uuid.v4(), BOOK3 = uuid.v4();
+
+        await db.addResource({
+          uuid: BOOK1,
+          title: 'First Book',
+          titleSort: 'First Book'
+        });
+
+        await db.addResource({
+          uuid: BOOK2,
+          title: 'Second Book',
+          titleSort: 'Second Book'
+        });
+
+        await db.addResource({
+          uuid: BOOK3,
+          title: 'Third Book',
+          titleSort: 'Third Book'
+        });
+
+        await db.addPersonRelation(BOOK1, PERSON1, PersonRelation.Author);
+        await db.addPersonRelation(BOOK2, PERSON1, PersonRelation.Author);
+        await db.addPersonRelation(BOOK3, PERSON1, PersonRelation.Author);
+
+        let resources = await db.findResources({
+          sortProps: [{
+            propName: 'author',
+            sortMode: SortMode.Desc
+          }]
+        });
+
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([BOOK1, BOOK2, BOOK3]);
+      });
+
       describe("sorting by a foreign field", function () {
         const A_PERSON = uuid.v4();
 

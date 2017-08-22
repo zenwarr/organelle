@@ -453,10 +453,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
     // one of predefined names for sorting and nameSort is property name.
 
     // so we need custom sort options processing
-    let joins: string, sort: string;
+    let joins: string = '', sort: string, sortList: string[] = [];
     if (options && options.sortProps && options.sortProps.length > 0) {
-      let joinsList: string[] = [],
-          sortList: string[] = [];
+      let joinsList: string[] = [];
 
       for (let sortProp of options.sortProps) {
         if (sortProp.propName && sortProp.sortMode != null) {
@@ -542,13 +541,18 @@ export class LibraryDatabase extends DatabaseWithOptions {
         }
       }
 
-      sort = 'ORDER BY ' + sortList.join(', ');
       joins = joinsList.join(' ');
-    } else {
-      joins = '';
-      let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
-      sort = 'ORDER BY ' + LibraryDatabase._makeSort(null, 'titleSort', mode, ResourceSpec);
     }
+
+    // add default sorting by title if no options or resources were not sorted by title
+    if (!options || !options.sortProps ||
+        !options.sortProps.some(sortProp => sortProp.propName === 'titleSort')) {
+      let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
+      sortList.push(LibraryDatabase._makeSort(null, 'titleSort',
+          mode, ResourceSpec));
+    }
+
+    sort = 'ORDER BY ' + sortList.join(', ');
 
     let query: string;
     if (joins) {
