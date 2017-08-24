@@ -322,6 +322,26 @@ export interface ListOptions {
   prefSortMode?: SortMode;
 }
 
+export enum Operator {
+  Equal,
+  And,
+  Or
+}
+
+export class Criterion {
+  public args: any[];
+
+  constructor(public op: Operator, ...args: any[]) {
+    this.args = [ ...args ];
+  }
+}
+
+export class CriterionProp {
+  constructor(public prop: string) {
+
+  }
+}
+
 export class LibraryDatabase extends DatabaseWithOptions {
   constructor(filename: string) {
     super(filename, CUR_LIBRARY_VERSION);
@@ -493,147 +513,135 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * When part after hash sign (#) is missing, default sorting for the table will be used.
    * You can use the following pseudo-tables for sorting:
    * [ person, author, group, lang, category, tag, series ]
+   * @param what Search criteria
    * @param {ListOptions} options Sorting and pagination options
    * @returns {Promise<Resource[]>} List of resources matching the request.
    */
-  async findResources(options?: ListOptions): Promise<Resource[]> {
-    let where = new WhereClauseBuilder();
+  async findResources(what?: Criterion|null, options?: ListOptions): Promise<Resource[]> {
+    let crit = this._evalCriterion(what, ResourceSpec);
+    let bound = crit.bound;
 
-    let limits = LibraryDatabase._limits('titleSort', { ...options, sortProps: [] });
+    let sortList: {
+      propName: string;
+      propExtra: string;
+      sortMode: SortMode;
+      rawProp: string;
+    }[];
 
-    let joins: string = '', sort: string, sortList: string[] = [];
-    if (options && options.sortProps && options.sortProps.length > 0) {
-      // if we have sort options specified
-      let joinsList: string[] = [];
+    if (options && options.sortProps) {
+      sortList = options.sortProps.map(prop => {
+        let [propName, propExtra] = LibraryDatabase._normalizeSortProp(prop.propName);
+        return {
+          propName: propName,
+          propExtra: propExtra,
+          rawProp: prop.propName,
+          sortMode: prop.sortMode
+        };
+      });
+    } else {
+      sortList = [];
+    }
 
-      for (let sortProp of options.sortProps) {
-        if (sortProp.propName && sortProp.sortMode != null) {
-          let hashIndex: number = sortProp.propName.indexOf('#');
-          let propName = hashIndex >= 0 ? sortProp.propName.slice(0, hashIndex) : sortProp.propName;
-          let propExtra = hashIndex >= 0 ? sortProp.propName.slice(hashIndex + 1) : '';
-
-          let joinWhere = new WhereClauseBuilder();
-
-          let personsJoined = false;
-          const makePersonJoin = async () => {
-            let sortPropName = propExtra ? propExtra : 'nameSort';
-
-            if (!personsJoined) {
-              let columns = this._makeForeignSortJoinColumns(sortPropName, sortProp.sortMode, 'person_id',
-                  PersonSpec, PersonRelationSpec);
-
-              let join = `INNER JOIN (SELECT ${columns} FROM res_to_persons_view ${joinWhere.clause} GROUP BY res_id) persons_join ON resources.uuid = persons_join.res_id`;
-              joinsList.push(join);
-
-              personsJoined = true;
-            }
-
-            sortList.push(LibraryDatabase._makeSort('persons_join', sortPropName, sortProp.sortMode,
-                PersonSpec, PersonRelationSpec));
-          };
-
-          let groupsJoined = false;
-          const makeGroupJoin = async () => {
-            let sortPropName = propExtra ? propExtra : 'titleSort';
-
-            if (!groupsJoined) {
-              let columns = this._makeForeignSortJoinColumns(sortPropName, sortProp.sortMode, 'group_id',
-                  this._groupSpec, GroupRelationSpec);
-
-              let join = `INNER JOIN (SELECT ${columns} FROM res_to_groups_view ${joinWhere.clause} GROUP BY res_id) groups_join ON resources.uuid = groups_join.res_id`;
-              joinsList.push(join);
-
-              groupsJoined = true;
-            }
-
-            sortList.push(LibraryDatabase._makeSort('groups_join', sortPropName, sortProp.sortMode,
-                this._groupSpec, GroupRelationSpec));
-          };
-
-          const addJoinWhere = (propName: string, value: any) => {
-            where.add(propName, value);
-            joinWhere.add(propName, value);
-          };
-
-          // which pseudo-table we should use?
-          switch (propName) {
-            case 'person':
-            case 'persons': {
-              await makePersonJoin();
-            } break;
-
-            case 'author':
-            case 'authors': {
-              addJoinWhere('relation',
-                  PersonRelationSpec.prop('relation').toDb(PersonRelation.Author));
-              await makePersonJoin();
-            } break;
-
-            case 'group':
-            case 'groups': {
-              await makeGroupJoin();
-            } break;
-
-            case 'tag':
-            case 'tags': {
-              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Tag));
-              await makeGroupJoin();
-            } break;
-
-            case 'lang':
-            case 'langs': {
-              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Language));
-              await makeGroupJoin();
-            } break;
-
-            case 'category':
-            case 'categories': {
-              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Category));
-              await makeGroupJoin();
-            } break;
-
-            case 'series': {
-              addJoinWhere('type', this._groupSpec.prop('groupType').toDb(KnownGroupTypes.Series));
-              await makeGroupJoin();
-            } break;
-
-            default: {
-              // assume this is a plain property name
-              if (propExtra) {
-                throw new Error(`Invalid sort option: no idea what "${propName} is`);
-              } else if (hashIndex >= 0 || !ResourceSpec.propSupported(propName)) {
-                throw new Error(`Invalid sort option: cannot find a property named ${sortProp.propName}`);
-              }
-
-              sortList.push(LibraryDatabase._makeSort(null, propName, sortProp.sortMode, ResourceSpec));
-            }
-          }
+    // check if there are any duplicated sort properties, in this case we should throw
+    for (let j = 1; j < sortList.length; j++) {
+      let jItem = sortList[j];
+      for (let k = 0; k < j; ++k) {
+        if (jItem.propName === sortList[k].propName && jItem.propExtra === sortList[k].propExtra) {
+          throw new Error(`Invalid sort option: cannot sort by same property (${jItem.rawProp}) twice`);
         }
       }
+    }
 
-      joins = joinsList.join(' ');
+    let joins: string[] = [],
+        order: string[] = [];
+
+    for (let sortProp of sortList) {
+      const makeGroupSortJoin = (where?: WhereClauseBuilder): void => {
+        let columns = this._makeForeignSortJoinColumns(sortProp.propExtra, sortProp.sortMode, 'group_id', this._groupSpec, GroupRelationSpec);
+        let joinName = uniqueName();
+        let computedWhere = where ? where.clause : '';
+        joins.push(`INNER JOIN (SELECT ${columns} FROM res_to_groups_view ${computedWhere} GROUP BY res_id) ${joinName} ON resources.uuid = ${joinName}.res_id`);
+        order.push(LibraryDatabase._makeSort(joinName, sortProp.propExtra, sortProp.sortMode, this._groupSpec, GroupRelationSpec));
+        if (where) {
+          Object.assign(bound, where.bound);
+        }
+      };
+
+      const makePersonSortJoin = (where?: WhereClauseBuilder): void => {
+        let columns = this._makeForeignSortJoinColumns(sortProp.propExtra, sortProp.sortMode, 'person_id', PersonSpec,
+            PersonRelationSpec);
+        let joinName = uniqueName();
+        let computedWhere = where ? where.clause : '';
+        joins.push(`INNER JOIN (SELECT ${columns} FROM res_to_persons_view ${computedWhere} GROUP BY res_id) ${joinName} ON resources.uuid = ${joinName}.res_id`);
+        order.push(LibraryDatabase._makeSort(joinName, sortProp.propExtra, sortProp.sortMode, PersonSpec, PersonRelationSpec));
+        if (where) {
+          Object.assign(bound, where.bound);
+        }
+      };
+
+      switch (sortProp.propName) {
+        case 'authors': {
+          let joinWhere = new WhereClauseBuilder();
+          joinWhere.add('relation', PersonRelationSpec.prop('relation').toDb(PersonRelation.Author));
+          makePersonSortJoin(joinWhere);
+        } break;
+
+        case 'persons': {
+          makePersonSortJoin();
+        } break;
+
+        case 'tags':
+        case 'categories':
+        case 'langs':
+        case 'series': {
+          const TYPES_MATCH = {
+            tags: KnownGroupTypes.Tag,
+            categories: KnownGroupTypes.Category,
+            langs: KnownGroupTypes.Language,
+            series: KnownGroupTypes.Series
+          };
+
+          let groupTypeField = this._groupSpec.prop('groupType');
+
+          let joinWhere = new WhereClauseBuilder();
+          joinWhere.add(groupTypeField.column, groupTypeField.toDb(TYPES_MATCH[sortProp.propName]));
+          makeGroupSortJoin(joinWhere);
+        } break;
+
+        case 'groups': {
+          makeGroupSortJoin();
+        } break;
+
+        default: {
+          if (sortProp.propExtra) {
+            throw new Error(`Invalid sort option: no idea what "${sortProp.propName} is`);
+          }
+
+          order.push(LibraryDatabase._makeSort(null, sortProp.propName, sortProp.sortMode, ResourceSpec));
+        }
+      }
     }
 
     // if we have no sorting options, we should sort by resource name by default.
     // also, we need to add sorting by title to the end of sorting options, for resources
     // with equal author names (or whatever we sort by) to be sorted in some way.
-    if (!options || !options.sortProps ||
-        !options.sortProps.some(sortProp => sortProp.propName === 'titleSort')) {
+    if (!order.length || !sortList.some(sortProp => sortProp.rawProp === 'titleSort')) {
       let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
-      sortList.push(LibraryDatabase._makeSort(null,'titleSort', mode, ResourceSpec));
+      order.push(LibraryDatabase._makeSort(null, 'titleSort', mode, ResourceSpec));
     }
 
-    sort = 'ORDER BY ' + sortList.join(', ');
+    let orderClause = 'ORDER BY ' + order.join(', ');
+
+    let limits = LibraryDatabase._limits('', options);
 
     let query: string;
     if (joins) {
-      query = `SELECT resources.* FROM resources ${joins} ${sort} ${limits}`;
+      query = `SELECT resources.* FROM resources ${joins.join(' ')} ${orderClause} ${limits}`;
     } else {
-      query = `SELECT * FROM resources ${sort} ${limits}`;
+      query = `SELECT * FROM resources ${orderClause} ${limits}`;
     }
 
-    let rows = await this.db.all(query, where.bound);
-    return rows.map((row: any): Group => ResourceSpec.rowToEntry(row));
+    return (await this.db.all(query, bound)).map(row => ResourceSpec.rowToEntry(row));
   }
 
   /**
@@ -691,15 +699,22 @@ export class LibraryDatabase extends DatabaseWithOptions {
     if (name != null) {
       let nameField = PersonSpec.prop('name');
       let nameSortField = PersonSpec.prop('nameSort');
-      where.addRaw(`(${nameField.column} = ? OR ${nameSortField.column} = ?)`, [
-          nameField.toDb(name), nameSortField.toDb(name)
-      ]);
+
+      let binding1 = uniqueBoundName(),
+          binding2 = uniqueBoundName();
+      where.addRaw(`(${nameField.column} = ${binding1} OR ${nameSortField.column} = ${binding2})`, {
+        [binding1]: nameField.toDb(name),
+        [binding2]: nameSortField.toDb(name)
+      });
     }
 
     if (relation != null) {
       let relationField = PersonRelationSpec.prop('relation');
-      where.addRaw(`uuid IN (SELECT person_id FROM res_to_persons WHERE ${relationField.column} = ?)`,
-          relationField.toDb(relation));
+
+      let binding = uniqueBoundName();
+      where.addRaw(`uuid IN (SELECT person_id FROM res_to_persons WHERE ${relationField.column} = ${binding})`, {
+        [binding]: relationField.toDb(relation)
+      });
     }
 
     let limits = LibraryDatabase._limits('nameSort', options, PersonSpec);
@@ -854,9 +869,14 @@ export class LibraryDatabase extends DatabaseWithOptions {
     if (text != null) {
       let titleField = this._groupSpec.prop('title');
       let titleSortField = this._groupSpec.prop('titleSort');
-      where.addRaw(`(${titleField.column} = ? OR ${titleSortField.column} = ?)`, [
-          titleField.toDb(text), titleSortField.toDb(text)
-      ]);
+
+      let binding1 = uniqueBoundName(),
+          binding2 = uniqueBoundName();
+
+      where.addRaw(`(${titleField.column} = ${binding1} OR ${titleSortField.column} = ${binding2})`, {
+        [binding1]: titleField.toDb(text),
+        [binding2]: titleSortField.toDb(text)
+      });
     }
 
     if (groupType != null) {
@@ -983,6 +1003,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {string} resource UUID of a resource
    * @param {PersonRelation} relation Type of relations you are interested in. If not specified, all relations
    * will be returned.
+   * @param options Sorting and pagination options
    * @returns {Promise<RelatedPerson[]>} List of relations between persons and this resource.
    */
   async relatedPersons(resource: Resource|string, relation?: PersonRelation, options?: ListOptions): Promise<RelatedPerson[]> {
@@ -1126,7 +1147,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
 
     if (groupType != null) {
-      whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
+      let binding = uniqueBoundName();
+      whereClause.addRaw(`group_id IN (SELECT uuid FROM groups WHERE type = ${binding})`, {
+        [binding]: groupType.uuid
+      });
     }
 
     await this.db.run(`DELETE FROM res_to_groups ${whereClause.clause}`, whereClause.bound);
@@ -1155,7 +1179,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
 
     if (groupType != null) {
-      whereClause.addRaw('group_id IN (SELECT uuid FROM groups WHERE type = ?)', groupType.uuid);
+      let binding = uniqueBoundName();
+      whereClause.addRaw(`group_id IN (SELECT uuid FROM groups WHERE type = ${binding})`, {
+        [binding]: groupType.uuid
+      });
     }
 
     let limits = LibraryDatabase._limits('titleSort', options, this._groupSpec, GroupRelationSpec);
@@ -1238,8 +1265,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
       }
     }
 
-    let result = await this.db.run(`UPDATE objects ${setClause.clause} WHERE id = ?`,
-        [ ...setClause.bound, obj.rowId ]);
+    let whereClause = new WhereClauseBuilder();
+    whereClause.add('id', obj.rowId);
+
+    let result = await this.db.run(`UPDATE objects ${setClause.clause} ${whereClause.clause}`,
+        Object.assign({}, setClause.bound, whereClause.bound));
     if (result.changes === 0) {
       throw new Error('Cannot update object relation: no record with given rowId exists');
     }
@@ -1422,6 +1452,134 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     return resultParts.join(' ');
   }
+
+  protected static _normalizeSortProp(prop: string): string[] {
+    let propName: string, propExtra: string;
+    let hashIndex = prop.indexOf('#');
+    if (hashIndex >= 0) {
+      propName = prop.slice(0, hashIndex).trim();
+      propExtra = prop.slice(hashIndex + 1).trim();
+
+      if (!propExtra) {
+        throw new Error(`Invalid sort property: ${prop}`);
+      }
+    } else {
+      propName = prop;
+      propExtra = '';
+    }
+
+    if (!propExtra) {
+      switch (propName.toLowerCase().trim()) {
+        case 'author':
+        case 'authors':
+          return ['authors', 'nameSort'];
+
+        case 'person':
+        case 'persons':
+          return ['persons', 'nameSort'];
+
+        case 'group':
+        case 'groups':
+          return ['groups', 'titleSort'];
+
+        case 'tag':
+        case 'tags':
+          return ['tags', 'titleSort'];
+
+        case 'category':
+        case 'categories':
+          return ['categories', 'titleSort'];
+
+        case 'lang':
+        case 'langs':
+          return ['langs', 'titleSort'];
+
+        case 'series':
+          return ['series', 'titleSort'];
+      }
+    }
+    return [propName, propExtra];
+  }
+
+  protected _evalCriterion(crit: Criterion|null|undefined, spec: EntrySpec): EvalCriterionResult {
+    let result: EvalCriterionResult = {
+      sql: '',
+      bound: {},
+      personsJoin: false,
+      groupsJoin: false
+    };
+
+    if (crit == null) {
+      return result;
+    }
+
+    let field: FieldSpec|null = null;
+
+    const evalArg = (arg: any): string => {
+      if (arg instanceof CriterionProp) {
+        let prop = arg.prop;
+        if (spec.propSupported(prop)) {
+          return (field = spec.prop(prop)).column;
+        } else if (spec === ResourceSpec) {
+          if (PersonSpec.propSupported(prop)) {
+            result.personsJoin = true;
+            return (field = PersonSpec.prop(prop)).column;
+          } else if (PersonRelationSpec.propSupported(prop)) {
+            result.personsJoin = true;
+            return (field = PersonRelationSpec.prop(prop)).column;
+          } else if (this._groupSpec.propSupported(prop)) {
+            result.groupsJoin = true;
+            return (field = this._groupSpec.prop(prop)).column;
+          } else if (GroupRelationSpec.propSupported(prop)) {
+            result.groupsJoin = true;
+            return (field = GroupRelationSpec.prop(prop)).column;
+          } else {
+            throw new Error(`Invalid search criterion: no property named ${prop} has been found`);
+          }
+        } else {
+          throw new Error(`Invalid search criterion: no property named ${prop} has been found`);
+        }
+      } else if (arg instanceof Criterion) {
+        let subResult = this._evalCriterion(arg, spec);
+        Object.assign(result.bound, subResult.bound);
+        result.personsJoin = result.personsJoin || subResult.personsJoin;
+        result.groupsJoin = result.groupsJoin || subResult.groupsJoin;
+        return subResult.sql;
+      } else {
+        if (field == null) {
+          throw new Error('Invalid search criterion: cannot convert a value to a database-suitable form');
+        }
+        let bindingName = uniqueName();
+        result.bound[bindingName] = field.toDb(arg);
+        return bindingName;
+      }
+    };
+
+    switch (crit.op) {
+      case Operator.Equal: {
+        let left = evalArg(crit.args[0]),
+            right = evalArg(crit.args[1]);
+        result.sql = `${left} = ${right}`;
+      } break;
+
+      case Operator.And: {
+        result.sql = crit.args.map(arg => '(' + evalArg(arg) + ')').join(' AND ');
+      } break;
+
+      case Operator.Or: {
+        result.sql = crit.args.map(arg => '(' + evalArg(arg) + ')').join(' AND ');
+      } break;
+    }
+
+    return result;
+  }
+}
+
+interface EvalCriterionResult {
+  sql: string;
+  bound: SqlBindings;
+  personsJoin: boolean;
+  groupsJoin: boolean;
 }
 
 type PropValidator = (value: any) => boolean;
@@ -1730,32 +1888,31 @@ function workaroundSpread(obj: { [name: string]: any }, uuid: string): any {
   return result;
 }
 
+type SqlBindings = { [name: string]: any };
+
 abstract class ClauseBuilder {
   abstract get clause(): string;
 
   add(column: string, value: any): void {
-    this.addRaw(column + ' = ?', value);
+    let bindName = uniqueBoundName();
+    this.addRaw(column + ' = ' + bindName, {
+      [bindName]: value
+    });
   }
 
-  addRaw(cond: string, value: any): void {
+  addRaw(cond: string, bindings: SqlBindings): void {
     this._list.push(cond);
-    if (Array.isArray(value)) {
-      for (let val of value) {
-        this._bound.push(val);
-      }
-    } else {
-      this._bound.push(value);
-    }
+    Object.assign(this._bound, bindings);
   }
 
-  get bound(): any[] {
+  get bound(): SqlBindings {
     return this._bound;
   }
 
   /** Protected area **/
 
   protected _list: string[] = [];
-  protected _bound: any[] = [];
+  protected _bound: SqlBindings = {};
 }
 
 export class WhereClauseBuilder extends ClauseBuilder {
@@ -1772,4 +1929,12 @@ export class SetClauseBuilder extends ClauseBuilder {
   get clause(): string {
     return ' SET ' + this._list.join(', ');
   }
+}
+
+function uniqueName(): string {
+  return 'uniq_' + Math.floor(Math.random() * 100000);
+}
+
+function uniqueBoundName(): string {
+  return ':' + uniqueName();
 }

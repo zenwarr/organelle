@@ -833,7 +833,7 @@ describe('dbs', function() {
       });
 
       it("should return resources in reversed order", async function () {
-        let resources = await db.findResources({
+        let resources = await db.findResources(null, {
           prefSortMode: SortMode.Desc
         });
         expect(resources).to.have.lengthOf(3);
@@ -865,7 +865,7 @@ describe('dbs', function() {
         await db.addPersonRelation(BOOK2, PERSON1, PersonRelation.Author);
         await db.addPersonRelation(BOOK3, PERSON1, PersonRelation.Author);
 
-        let resources = await db.findResources({
+        let resources = await db.findResources(null, {
           sortProps: [{
             propName: 'author',
             sortMode: SortMode.Desc
@@ -892,7 +892,7 @@ describe('dbs', function() {
         });
 
         it("should sort resources by foreign field", async function () {
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'authors#nameSort',
               sortMode: SortMode.Asc
@@ -903,7 +903,7 @@ describe('dbs', function() {
         });
 
         it("should sort resources by foreign field (2)", async function () {
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'authors',
               sortMode: SortMode.Asc
@@ -914,7 +914,7 @@ describe('dbs', function() {
         });
 
         it("should sort resources by author in reversed order", async function () {
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'authors',
               sortMode: SortMode.Desc
@@ -934,7 +934,7 @@ describe('dbs', function() {
           await db.addGroupRelation(MOCKINGBIRD, series.uuid as string, 2);
           await db.addGroupRelation(TOLL, series.uuid as string, 3);
 
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'series#groupIndex',
               sortMode: SortMode.Desc
@@ -981,7 +981,7 @@ describe('dbs', function() {
           await db.addGroupRelation(BOOK3, series.uuid as string, 2);
           await db.addGroupRelation(TOLL, series.uuid as string, 3);
 
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'series#groupIndex',
               sortMode: SortMode.Desc
@@ -995,7 +995,7 @@ describe('dbs', function() {
         });
 
         it("should still sort resources by a non-foreign properties", async function () {
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'publishDate',
               sortMode: SortMode.Desc
@@ -1008,7 +1008,7 @@ describe('dbs', function() {
         it("should sort resources by author not taking other persons into account", async function () {
           await db.addPersonRelation(MOCKINGBIRD, A_PERSON, PersonRelation.Editor);
 
-          let resources = await db.findResources({
+          let resources = await db.findResources(null, {
             sortProps: [{
               propName: 'authors#nameSort',
               sortMode: SortMode.Asc

@@ -2,7 +2,6 @@ import * as sqlite from 'sqlite';
 import * as sqlite3 from 'sqlite3';
 import * as path from 'path';
 import * as uuid from 'uuid';
-import * as fs from 'fs-extra';
 
 export type Savepoint = string;
 

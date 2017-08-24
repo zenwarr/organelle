@@ -1,5 +1,4 @@
-import {LibraryDatabase, RelatedObject, Resource} from "./library-db";
-import {StorageDatabase, StorageObject} from "./storage-db";
+import {LibraryDatabase, RelatedObject} from "./library-db";
 import {AbstractStorage} from "./storage";
 import {Database} from "./db";
 

@@ -4,7 +4,6 @@ import * as fs from "fs";
 import * as tmp from 'tmp';
 import {promisify} from "util";
 import {PersonRelation, RelatedPerson} from "./library-db";
-import {file} from "tmp";
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);

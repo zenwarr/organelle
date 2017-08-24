@@ -112,7 +112,7 @@ export class LibraryServer {
 
   protected async _handleResources(params: any, query: any): Promise<any> {
     let opts = this._listOptionsFromQuery(query);
-    return (await this._lib.libraryDatabase.findResources(opts)).map(value => this._resourceToResponse(value));
+    return (await this._lib.libraryDatabase.findResources(null, opts)).map(value => this._resourceToResponse(value));
   }
 
   protected async _handleResource(params: any): Promise<any> {

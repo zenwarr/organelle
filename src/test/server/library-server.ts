@@ -2,7 +2,7 @@ import { should, expect } from 'chai';
 import * as chai from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
 import * as testlib from './testlib';
-import {LibraryDatabase, PersonRelation} from "../../server/library-db";
+import {LibraryDatabase} from "../../server/library-db";
 import * as sinon from "sinon";
 import {LibraryServer} from "../../server/library-server";
 import {Library} from "../../server/library";

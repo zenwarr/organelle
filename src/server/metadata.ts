@@ -1,9 +1,8 @@
 import {
-  GroupType, KnownGroupTypes, LibraryDatabase, Person, PersonRelation, RelatedGroup, RelatedPerson,
+  KnownGroupTypes, LibraryDatabase, Person, PersonRelation, RelatedGroup, RelatedPerson,
   Resource
 } from "./library-db";
 import {VarResolver} from "./formatter";
-import {timestampToDate} from "./common";
 
 export interface ExtractedMetadata {
   title?: string;

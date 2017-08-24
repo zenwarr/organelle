@@ -1,8 +1,7 @@
 import {should, expect} from 'chai';
 import * as chai from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
-import {GroupType, KnownGroupTypes, LibraryDatabase, Resource, PersonRelation} from "../../server/library-db";
-import uuid = require("uuid");
+import {LibraryDatabase, Resource, PersonRelation} from "../../server/library-db";
 import {TemplateProcessor} from "../../server/formatter";
 import {createResourceVarResolver} from "../../server/metadata";
 import * as testlib from './testlib';
