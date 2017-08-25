@@ -5,6 +5,8 @@ import * as chai from 'chai';
 import * as chaiAsPromised from "chai-as-promised";
 import {DatabaseWithOptions} from "../../server/db";
 import {
+  CriterionEqual,
+  CriterionOr,
   GroupType, KnownGroupTypes, LibraryDatabase, ObjectRole, PersonRelation, RelatedObject,
   Resource, SortMode
 } from "../../server/library-db";
@@ -1130,6 +1132,41 @@ describe('dbs', function() {
         });
         expect(groups).to.have.lengthOf(1);
         expect(groups[0].uuid).to.be.equal(CATEGORY2);
+      });
+
+      it("should search resources by title", async function () {
+        let resources = await db.findResources('The Mist');
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([ MIST ]);
+      });
+
+      it("should search resources by criterion", async function () {
+        let resources = await db.findResources(new CriterionOr(new CriterionEqual('title', 'The Mist'), new CriterionEqual('title', 'For Whom The Bell Tolls')));
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([TOLL, MIST]);
+      });
+
+      it("should search resources by a foreign field", async function () {
+        await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+        await db.addPersonRelation(TOLL, KING, PersonRelation.Translator);
+        await db.addPersonRelation(MOCKINGBIRD, LEE, PersonRelation.Author);
+
+        let resources = await db.findResources(new CriterionEqual('author#name', 'Stephen King'));
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([MIST]);
+      });
+
+      it("should search resources by a default foreign field", async function () {
+        await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+        await db.addPersonRelation(TOLL, KING, PersonRelation.Translator);
+        await db.addPersonRelation(MOCKINGBIRD, LEE, PersonRelation.Author);
+
+        let resources = await db.findResources(new CriterionEqual('author', 'King, Stephen'));
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([MIST]);
+      });
+
+      it("should deal with ambiguous names", async function () {
+        await db.addGroupRelation(MIST, SORTING_TITLE);
+
+        let resources = await db.findResources(new CriterionEqual('groups#title', 'The Title'));
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([MIST]);
       });
     });
   });

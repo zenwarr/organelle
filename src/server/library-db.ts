@@ -1,6 +1,7 @@
 import {Database, DatabaseWithOptions} from './db';
 import * as uuid from 'uuid';
 import {dateToTimestamp, timestampToDate} from "./common";
+import {schema} from "./schema";
 
 export const CUR_LIBRARY_VERSION = 1;
 
@@ -269,13 +270,13 @@ const KNOWN_GROUP_TYPES_DATA: GroupType[] = [
   },
   {
     uuid: KnownGroupTypes.Category,
-    name: 'category',
+    name: 'categories',
     exclusive: true,
     ordered: false
   },
   {
     uuid: KnownGroupTypes.Language,
-    name: 'language',
+    name: 'langs',
     exclusive: false,
     ordered: false
   }
@@ -330,16 +331,34 @@ export enum Operator {
 
 export class Criterion {
   public args: any[];
+  public fixedArgCount: number|null = null;
 
   constructor(public op: Operator, ...args: any[]) {
     this.args = [ ...args ];
   }
 }
 
-export class CriterionProp {
-  constructor(public prop: string) {
-
+export class CriterionEqual extends Criterion {
+  constructor(prop: string, value: any) {
+    super(Operator.Equal, new CriterionProp(prop), value);
+    this.fixedArgCount = 2;
   }
+}
+
+export class CriterionOr extends Criterion {
+  constructor(...args: Criterion[]) {
+    super(Operator.Or, ...args);
+  }
+}
+
+export class CriterionAnd extends Criterion {
+  constructor(...args: Criterion[]) {
+    super(Operator.And, ...args);
+  }
+}
+
+export class CriterionProp {
+  constructor(public prop: string) { }
 }
 
 export class LibraryDatabase extends DatabaseWithOptions {
@@ -350,35 +369,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
   async create(): Promise<void> {
     await super.create();
 
-    const SCHEMA: string[] = [
-        `CREATE TABLE resources(uuid TEXT PRIMARY KEY, title TEXT NOT NULL, title_sort TEXT NOT NULL, rating SMALLINT, 
-              add_date DATETIME, last_modify_date DATETIME, publish_date TEXT, publisher TEXT, desc TEXT)`,
-        `CREATE TABLE persons(uuid TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, name_sort TEXT NOT NULL)`,
-        `CREATE TABLE res_to_persons(res_id TEXT NOT NULL, person_id TEXT NOT NULL, relation INTEGER NOT NULL,
-              UNIQUE(res_id, person_id, relation),
-              FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT,
-              FOREIGN KEY(person_id) REFERENCES persons(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
-        `CREATE TABLE group_types(uuid TEXT PRIMARY KEY, name TEXT UNIQUE, exclusive BOOLEAN, ordered BOOLEAN)`,
-        `CREATE TABLE groups(uuid TEXT PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, title_sort TEXT NOT NULL,
-              FOREIGN KEY(type) REFERENCES group_types(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
-        `CREATE TABLE res_to_groups(res_id TEXT NOT NULL, group_id TEXT NOT NULL, group_index INTEGER NOT NULL,
-              relation_tag TEXT NOT NULL DEFAULT '',
-              UNIQUE(res_id, group_id, group_index, relation_tag),
-              FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT,
-              FOREIGN KEY(group_id) REFERENCES groups(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
-        `CREATE TABLE objects(id INTEGER PRIMARY KEY, res_id TEXT NOT NULL, uuid TEXT NOT NULL,
-              role INTEGER NOT NULL, tag TEXT,
-              UNIQUE(res_id, uuid, role, tag),
-              FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
-        `CREATE VIEW res_to_groups_view AS SELECT title, title_sort, type, group_index, relation_tag, res_id,
-              group_id as linked_id FROM groups LEFT JOIN res_to_groups ON groups.uuid = group_id`,
-        `CREATE VIEW res_to_persons_view AS SELECT name, name_sort, relation, res_id, person_id as linked_id
-              FROM persons LEFT JOIN res_to_persons ON persons.uuid = person_id`
-    ];
-
-    for (let query of SCHEMA) {
-      await this.db.run(query);
-    }
+    await this.db.exec(schema);
 
     // add known groups
     let stmt = await this.db.prepare("INSERT INTO group_types(uuid, name, exclusive, ordered) VALUES(?, ?, ?, ?)");
@@ -407,6 +398,12 @@ export class LibraryDatabase extends DatabaseWithOptions {
   getGroupType(uuid: string): GroupType|null {
     uuid = Database.validateId(uuid);
     let found = this._groupTypes.find(x => x.uuid === uuid);
+    return found == null ? null : { ...found };
+  }
+
+  getGroupTypeByName(name: string): GroupType|null {
+    name = name.toLowerCase().trim();
+    let found = this._groupTypes.find(x => (x.name as string).toLowerCase() === name);
     return found == null ? null : { ...found };
   }
 
@@ -516,7 +513,11 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {ListOptions} options Sorting and pagination options
    * @returns {Promise<Resource[]>} List of resources matching the request.
    */
-  async findResources(what?: Criterion|null, options?: ListOptions): Promise<Resource[]> {
+  async findResources(what?: Criterion|string|null, options?: ListOptions): Promise<Resource[]> {
+    if (typeof what === 'string') {
+      what = new CriterionOr(new CriterionEqual('title', what), new CriterionEqual('titleSort', what));
+    }
+
     let crit = this._evalCriterion(what, ResourceSpec);
     let bound = crit.bound;
 
@@ -592,17 +593,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
         case 'categories':
         case 'langs':
         case 'series': {
-          const TYPES_MATCH = {
-            tags: KnownGroupTypes.Tag,
-            categories: KnownGroupTypes.Category,
-            langs: KnownGroupTypes.Language,
-            series: KnownGroupTypes.Series
-          };
-
           let groupTypeField = this._groupSpec.prop('groupType');
 
           let joinWhere = new WhereClauseBuilder();
-          joinWhere.add(groupTypeField.column, groupTypeField.toDb(TYPES_MATCH[sortProp.propName]));
+          joinWhere.add(groupTypeField.column, groupTypeField.toDb(this.getGroupTypeByName(sortProp.propName)));
           makeGroupSortJoin(joinWhere);
         } break;
 
@@ -628,15 +622,25 @@ export class LibraryDatabase extends DatabaseWithOptions {
       order.push(LibraryDatabase._makeSort(null, 'titleSort', mode, ResourceSpec));
     }
 
+    // add joins if we need them
+    if (crit.personsJoin) {
+      joins.push(`INNER JOIN res_to_persons_view persons ON resources.uuid = persons.res_id`);
+    }
+    if (crit.groupsJoin) {
+      joins.push(`INNER JOIN res_to_groups_view groups ON resources.uuid = groups.res_id`);
+    }
+
     let orderClause = 'ORDER BY ' + order.join(', ');
 
     let limits = LibraryDatabase._limits('', options);
 
+    let whereClause = crit.sql ? 'WHERE ' + crit.sql : '';
+
     let query: string;
-    if (joins) {
-      query = `SELECT resources.* FROM resources ${joins.join(' ')} ${orderClause} ${limits}`;
+    if (joins && joins.length > 0) {
+      query = `SELECT resources.* FROM resources ${joins.join(' ')} ${whereClause} ${orderClause} ${limits}`;
     } else {
-      query = `SELECT * FROM resources ${orderClause} ${limits}`;
+      query = `SELECT * FROM resources ${whereClause} ${orderClause} ${limits}`;
     }
 
     return (await this.db.all(query, bound)).map(row => ResourceSpec.rowToEntry(row));
@@ -1506,7 +1510,64 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return [propName, propExtra];
   }
 
-  protected _evalCriterion(crit: Criterion|null|undefined, spec: EntrySpec): EvalCriterionResult {
+  protected static _normalizeCriterionProp(prop: string): string[] {
+    let hashIndex = prop.indexOf('#');
+
+    let propName: string, propExtra: string;
+
+    if (hashIndex >= 0) {
+      propName = prop.slice(0, hashIndex);
+      propExtra = prop.slice(hashIndex + 1);
+
+      if (!propExtra) {
+        throw new Error(`Invalid search criteria: ${prop}`);
+      }
+    } else {
+      propName = prop;
+      propExtra = '';
+    }
+
+    switch (propName.toLowerCase().trim()) {
+      case 'author':
+      case 'authors':
+        propName = 'authors';
+        break;
+
+      case 'person':
+      case 'persons':
+        propName = 'persons';
+        break;
+
+      case 'group':
+      case 'groups':
+        propName = 'groups';
+        break;
+
+      case 'tag':
+      case 'tags':
+        propName = 'tags';
+        break;
+
+      case 'category':
+      case 'categories':
+        propName = 'categories';
+        break;
+
+      case 'lang':
+      case 'langs':
+        propName = 'langs';
+        break;
+
+      case 'series':
+        propName = 'series';
+        break;
+    }
+
+    return [propName, propExtra];
+  };
+
+  protected _evalCriterion(crit: Criterion|null|undefined, spec: EntrySpec,
+                           inContext?: EvalCriterionContext): EvalCriterionResult {
     let result: EvalCriterionResult = {
       sql: '',
       bound: {},
@@ -1518,65 +1579,140 @@ export class LibraryDatabase extends DatabaseWithOptions {
       return result;
     }
 
-    let field: FieldSpec|null = null;
+    crit = this._normalizeCriterion(crit, spec);
 
-    const evalArg = (arg: any): string => {
+    let context: EvalCriterionContext = inContext ? inContext : { };
+
+    const computeArg = (arg: any, crit: Criterion, argIndex: number): string => {
       if (arg instanceof CriterionProp) {
         let prop = arg.prop;
         if (spec.propSupported(prop)) {
-          return (field = spec.prop(prop)).column;
+          return (context.field = spec.prop(prop)).column;
         } else if (spec === ResourceSpec) {
-          if (PersonSpec.propSupported(prop)) {
-            result.personsJoin = true;
-            return (field = PersonSpec.prop(prop)).column;
-          } else if (PersonRelationSpec.propSupported(prop)) {
-            result.personsJoin = true;
-            return (field = PersonRelationSpec.prop(prop)).column;
-          } else if (this._groupSpec.propSupported(prop)) {
-            result.groupsJoin = true;
-            return (field = this._groupSpec.prop(prop)).column;
-          } else if (GroupRelationSpec.propSupported(prop)) {
-            result.groupsJoin = true;
-            return (field = GroupRelationSpec.prop(prop)).column;
-          } else {
-            throw new Error(`Invalid search criterion: no property named ${prop} has been found`);
+          let [propName, propExtra] = LibraryDatabase._normalizeCriterionProp(prop);
+
+          switch (propName) {
+            case 'persons': {
+              result.personsJoin = true;
+              if (PersonSpec.propSupported(propExtra)) {
+                return 'persons.' + (context.field = PersonSpec.prop(propExtra)).column;
+              } else if (PersonRelationSpec.propSupported(propExtra)) {
+                return 'persons.' + (context.field = PersonRelationSpec.prop(propExtra)).column;
+              } else {
+                throw new Error(`Invalid search criterion: ${prop}`);
+              }
+            }
+
+            case 'groups': {
+              result.groupsJoin = true;
+              if (this._groupSpec.propSupported(propExtra)) {
+                return 'groups.' + (context.field = this._groupSpec.prop(propExtra)).column;
+              } else if (GroupRelationSpec.propSupported(propExtra)) {
+                return 'groups.' + (context.field = GroupRelationSpec.prop(propExtra)).column;
+              } else {
+                throw new Error(`Invalid search criterion: ${prop}`);
+              }
+            }
+
+            default:
+              throw new Error(`Invalid search criterion: no idea what ${prop} is`);
           }
         } else {
           throw new Error(`Invalid search criterion: no property named ${prop} has been found`);
         }
       } else if (arg instanceof Criterion) {
-        let subResult = this._evalCriterion(arg, spec);
+        let subResult = this._evalCriterion(arg, spec, { });
         Object.assign(result.bound, subResult.bound);
         result.personsJoin = result.personsJoin || subResult.personsJoin;
         result.groupsJoin = result.groupsJoin || subResult.groupsJoin;
         return subResult.sql;
       } else {
-        if (field == null) {
+        if (context.field == null) {
           throw new Error('Invalid search criterion: cannot convert a value to a database-suitable form');
         }
-        let bindingName = uniqueName();
-        result.bound[bindingName] = field.toDb(arg);
+        let bindingName = uniqueBoundName();
+        result.bound[bindingName] = context.field.toDb(arg);
         return bindingName;
       }
     };
 
     switch (crit.op) {
       case Operator.Equal: {
-        let left = evalArg(crit.args[0]),
-            right = evalArg(crit.args[1]);
+        // we should evaluate property argument first
+        let left: string, right: string;
+
+        if (crit.args[0] instanceof CriterionProp) {
+          left = computeArg(crit.args[0], crit, 0);
+          right = computeArg(crit.args[1], crit, 1);
+        } else {
+          right = computeArg(crit.args[1], crit, 1);
+          left = computeArg(crit.args[0], crit, 0);
+        }
+
         result.sql = `${left} = ${right}`;
       } break;
 
       case Operator.And: {
-        result.sql = crit.args.map(arg => '(' + evalArg(arg) + ')').join(' AND ');
+        result.sql = crit.args.map((arg, i) => '(' + computeArg(arg, crit as Criterion, i) + ')').join(' AND ');
       } break;
 
       case Operator.Or: {
-        result.sql = crit.args.map(arg => '(' + evalArg(arg) + ')').join(' AND ');
+        result.sql = crit.args.map((arg, i) => '(' + computeArg(arg, crit as Criterion, i) + ')').join(' OR ');
       } break;
     }
 
     return result;
+  }
+
+  protected _normalizeCriterion(crit: Criterion, spec: EntrySpec): Criterion {
+    function buildProp(propName: string, propExtra: string): string {
+      return propExtra ? propName + '#' + propExtra : propName;
+    }
+
+    if (crit.fixedArgCount === 2) {
+      // move property to the first place if it is not the first one
+      if (crit.args[1] instanceof CriterionProp && !(crit.args[0] instanceof CriterionProp)) {
+        [crit.args[0], crit.args[1]] = [crit.args[1], crit.args[0]];
+      }
+    }
+
+    if (spec === ResourceSpec) {
+      // first replace pseudo-tables like 'authors' or 'tags' with persons and groups
+      for (let j = 0; j < crit.args.length; ++j) {
+        let arg = crit.args[j];
+
+        if (arg instanceof CriterionProp) {
+          let [propName, propExtra] = LibraryDatabase._normalizeCriterionProp(arg.prop);
+
+          if (propName === 'authors') {
+            // add AND relation = PersonRelation.Author to the criterion
+            arg.prop = buildProp('persons', propExtra);
+            let result = new CriterionAnd(crit, new CriterionEqual('persons#relation', PersonRelation.Author));
+            return this._normalizeCriterion(result, spec);
+          }
+
+          let groupType = this.getGroupTypeByName(propExtra);
+          if (groupType) {
+            arg.prop = buildProp('groups', propExtra);
+            let result = new CriterionAnd(crit, new CriterionEqual('groups#groupType', groupType));
+            return this._normalizeCriterion(result, spec);
+          }
+        } else if (arg instanceof Criterion) {
+          crit.args[j] = this._normalizeCriterion(arg, spec);
+        }
+      }
+
+      // now replace default search (when a table used without a property) with preferred option
+      if (crit instanceof CriterionEqual && crit.args[0] instanceof CriterionProp && crit.args[0].prop.indexOf('#') < 0) {
+        if (crit.args[0].prop === 'persons') {
+          return new CriterionOr(new CriterionEqual('persons#name', crit.args[1]), new CriterionEqual('persons#nameSort', crit.args[1]));
+        } else if (crit.args[0].prop === 'groups') {
+          return new CriterionOr(new CriterionEqual('groups#name', crit.args[1]), new CriterionEqual('groups#nameSort', crit.args[1]));
+        }
+      }
+    }
+
+    return crit;
   }
 }
 
@@ -1942,4 +2078,8 @@ function uniqueName(): string {
 
 function uniqueBoundName(): string {
   return ':' + uniqueName();
+}
+
+interface EvalCriterionContext {
+  field?: FieldSpec;
 }
