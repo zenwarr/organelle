@@ -288,7 +288,7 @@ export enum SortMode {
 
 export interface SortProp {
   propName: string;
-  sortMode: SortMode;
+  sortMode?: SortMode;
 }
 
 /**
@@ -371,10 +371,9 @@ export class LibraryDatabase extends DatabaseWithOptions {
               UNIQUE(res_id, uuid, role, tag),
               FOREIGN KEY(res_id) REFERENCES resources(uuid) ON DELETE CASCADE ON UPDATE RESTRICT)`,
         `CREATE VIEW res_to_groups_view AS SELECT title, title_sort, type, group_index, relation_tag, res_id,
-              group_id FROM groups INNER JOIN res_to_groups ON groups.uuid = group_id`,
-        `CREATE VIEW res_to_persons_view AS SELECT name, name_sort, relation, res_id, person_id
-              FROM persons INNER JOIN res_to_persons ON persons.uuid = person_id`
-
+              group_id as linked_id FROM groups LEFT JOIN res_to_groups ON groups.uuid = group_id`,
+        `CREATE VIEW res_to_persons_view AS SELECT name, name_sort, relation, res_id, person_id as linked_id
+              FROM persons LEFT JOIN res_to_persons ON persons.uuid = person_id`
     ];
 
     for (let query of SCHEMA) {
@@ -535,7 +534,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
           propName: propName,
           propExtra: propExtra,
           rawProp: prop.propName,
-          sortMode: prop.sortMode
+          sortMode: prop.sortMode == null ? SortMode.Asc : prop.sortMode
         };
       });
     } else {
@@ -557,10 +556,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     for (let sortProp of sortList) {
       const makeGroupSortJoin = (where?: WhereClauseBuilder): void => {
-        let columns = this._makeForeignSortJoinColumns(sortProp.propExtra, sortProp.sortMode, 'group_id', this._groupSpec, GroupRelationSpec);
+        let columns = this._makeForeignSortJoinColumns(sortProp.propExtra, sortProp.sortMode, this._groupSpec, GroupRelationSpec);
         let joinName = uniqueName();
         let computedWhere = where ? where.clause : '';
-        joins.push(`INNER JOIN (SELECT ${columns} FROM res_to_groups_view ${computedWhere} GROUP BY res_id) ${joinName} ON resources.uuid = ${joinName}.res_id`);
+        joins.push(`LEFT JOIN (SELECT ${columns} FROM res_to_groups_view ${computedWhere} GROUP BY res_id) ${joinName} ON resources.uuid = ${joinName}.res_id`);
         order.push(LibraryDatabase._makeSort(joinName, sortProp.propExtra, sortProp.sortMode, this._groupSpec, GroupRelationSpec));
         if (where) {
           Object.assign(bound, where.bound);
@@ -568,11 +567,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       };
 
       const makePersonSortJoin = (where?: WhereClauseBuilder): void => {
-        let columns = this._makeForeignSortJoinColumns(sortProp.propExtra, sortProp.sortMode, 'person_id', PersonSpec,
-            PersonRelationSpec);
+        let columns = this._makeForeignSortJoinColumns(sortProp.propExtra, sortProp.sortMode, PersonSpec, PersonRelationSpec);
         let joinName = uniqueName();
         let computedWhere = where ? where.clause : '';
-        joins.push(`INNER JOIN (SELECT ${columns} FROM res_to_persons_view ${computedWhere} GROUP BY res_id) ${joinName} ON resources.uuid = ${joinName}.res_id`);
+        joins.push(`LEFT JOIN (SELECT ${columns} FROM res_to_persons_view ${computedWhere} GROUP BY res_id) ${joinName} ON resources.uuid = ${joinName}.res_id`);
         order.push(LibraryDatabase._makeSort(joinName, sortProp.propExtra, sortProp.sortMode, PersonSpec, PersonRelationSpec));
         if (where) {
           Object.assign(bound, where.bound);
@@ -1381,8 +1379,19 @@ export class LibraryDatabase extends DatabaseWithOptions {
     await this.db.run(`DELETE FROM ${spec.table} WHERE uuid = ?`, [ uuid ]);
   }
 
-  protected _makeForeignSortJoinColumns(sortProp: string, sortMode: SortMode, linkField: string,
-                                        tableSpec: EntrySpec, tableLinksSpec: EntrySpec): string {
+  protected _makeForeignSortJoinColumns(sortProp: string, sortMode: SortMode, tableSpec: EntrySpec,
+                                        tableLinksSpec: EntrySpec): string {
+    let columns: string[] = [];
+    columns.push('res_id');
+
+    if (tableSpec.propSupported(sortProp)) {
+      columns.push(fieldMapper(tableSpec.prop(sortProp)));
+    } else if (tableLinksSpec.propSupported(sortProp)) {
+      columns.push(fieldMapper(tableLinksSpec.prop(sortProp)));
+    } else {
+      throw new Error(`Invalid sort option: cannot find column matching a property named ${sortProp}`);
+    }
+
     function fieldMapper(field: FieldSpec): string {
       if (field.prop === sortProp) {
         let sortFunc = sortMode === SortMode.Desc ? 'max' : 'min';
@@ -1394,14 +1403,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
       }
     }
 
-    let columns = [ ...tableSpec.fieldSpecs.map(fieldMapper), ...tableLinksSpec.fieldSpecs.map(fieldMapper) ]
-        .filter(x => !!x);
-    columns.push('res_id');
-    columns.push(linkField);
     return columns.join(', ');
   }
 
-  protected static _makeSort(table: string|null, sortProp: string, mode: SortMode, ...specs: EntrySpec[]): string {
+  protected static _makeSort(table: string|null, sortProp: string, mode: SortMode|undefined, ...specs: EntrySpec[]): string {
     let columnName: string|null = null;
     for (let spec of specs) {
       if (spec.propSupported(sortProp)) {

@@ -872,7 +872,7 @@ describe('dbs', function() {
           }]
         });
 
-        expect(resources.map(x => x.uuid)).to.be.deep.equal([BOOK1, BOOK2, BOOK3]);
+        expect(resources.map(x => x.uuid)).to.be.deep.equal([BOOK1, BOOK2, BOOK3, TOLL, MOCKINGBIRD, MIST]);
       });
 
       describe("sorting by a foreign field", function () {
@@ -900,6 +900,25 @@ describe('dbs', function() {
           });
 
           expect(resources.map(x => x.uuid)).to.be.deep.equal([ TOLL, MIST, MOCKINGBIRD ]);
+        });
+
+        it("resources without an author should come first", async function () {
+          const EMPTY = uuid.v4();
+
+          await db.addResource({
+            uuid: EMPTY,
+            title: 'Book without authors',
+            titleSort: 'Book without authors'
+          });
+
+          let resources = await db.findResources(null, {
+            sortProps: [{
+              propName: 'authors#nameSort',
+              sortMode: SortMode.Asc
+            }]
+          });
+
+          expect(resources.map(x => x.uuid)).to.be.deep.equal([ EMPTY, TOLL, MIST, MOCKINGBIRD ]);
         });
 
         it("should sort resources by foreign field (2)", async function () {
@@ -1016,6 +1035,16 @@ describe('dbs', function() {
           });
 
           expect(resources.map(x => x.uuid)).to.be.deep.equal([ TOLL, MIST, MOCKINGBIRD ]);
+        });
+
+        it("should not sort by the same property twice", async function () {
+          return expect(db.findResources(null, {
+            sortProps: [{
+              propName: 'authors'
+            }, {
+              propName: 'authors#sortName'
+            }]
+          })).to.be.rejected;
         });
       });
     });
