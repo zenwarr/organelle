@@ -326,7 +326,8 @@ export interface ListOptions {
 export enum Operator {
   Equal,
   And,
-  Or
+  Or,
+  HasRelationWith
 }
 
 export class Criterion {
@@ -342,6 +343,13 @@ export class CriterionEqual extends Criterion {
   constructor(prop: string, value: any) {
     super(Operator.Equal, new CriterionProp(prop), value);
     this.fixedArgCount = 2;
+  }
+}
+
+export class CriterionHasRelationWith extends Criterion {
+  constructor(criterion: Criterion) {
+    super(Operator.HasRelationWith, criterion);
+    this.fixedArgCount = 1;
   }
 }
 
@@ -498,6 +506,21 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   /**
+   * Get list of resources with a specific name.
+   * @param title Title to search for
+   * @param {ListOptions} options Sorting and pagination options
+   * @returns {Promise<Resource[]>} List of resources matching the request.
+   */
+  async findResources(title?: string, options?: ListOptions): Promise<Resource[]> {
+    let crit = title == null ? undefined : new CriterionOr(
+        new CriterionEqual('title', title),
+        new CriterionEqual('titleSort', title)
+    );
+
+    return this.findResourcesByCriteria(crit, options);
+  }
+
+  /**
    * Get list of resources matching given criteria.
    * It is possible to sort matched resources not only by title and other field of Resource object, but by foreign keys.
    * For example, it is possible to sort resource by author.
@@ -513,7 +536,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {ListOptions} options Sorting and pagination options
    * @returns {Promise<Resource[]>} List of resources matching the request.
    */
-  async findResources(what?: Criterion|string|null, options?: ListOptions): Promise<Resource[]> {
+  async findResourcesByCriteria(what?: Criterion|string|null, options?: ListOptions): Promise<Resource[]> {
     if (typeof what === 'string') {
       what = new CriterionOr(new CriterionEqual('title', what), new CriterionEqual('titleSort', what));
     }
@@ -589,27 +612,25 @@ export class LibraryDatabase extends DatabaseWithOptions {
           makePersonSortJoin();
         } break;
 
-        case 'tags':
-        case 'categories':
-        case 'langs':
-        case 'series': {
-          let groupTypeField = this._groupSpec.prop('groupType');
-
-          let joinWhere = new WhereClauseBuilder();
-          joinWhere.add(groupTypeField.column, groupTypeField.toDb(this.getGroupTypeByName(sortProp.propName)));
-          makeGroupSortJoin(joinWhere);
-        } break;
-
         case 'groups': {
           makeGroupSortJoin();
         } break;
 
         default: {
           if (sortProp.propExtra) {
-            throw new Error(`Invalid sort option: no idea what "${sortProp.propName} is`);
-          }
+            let groupTypeField = this._groupSpec.prop('groupType');
 
-          order.push(LibraryDatabase._makeSort(null, sortProp.propName, sortProp.sortMode, ResourceSpec));
+            let groupType = this.getGroupTypeByName(sortProp.propName);
+            if (!groupType) {
+              throw new Error(`Invalid sort option: no idea what "${sortProp.propName} is`);
+            }
+
+            let joinWhere = new WhereClauseBuilder();
+            joinWhere.add(groupTypeField.column, groupTypeField.toDb(groupType));
+            makeGroupSortJoin(joinWhere);
+          } else {
+            order.push(LibraryDatabase._makeSort(null, sortProp.propName, sortProp.sortMode, ResourceSpec));
+          }
         }
       }
     }
@@ -696,33 +717,40 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<Person[]>}
    */
   async findPersons(name?: string, relation?: PersonRelation, options?: ListOptions): Promise<Person[]> {
-    let where = new WhereClauseBuilder();
+    let nameCrit = name == null ? undefined : new CriterionOr(
+        new CriterionEqual('name', name),
+        new CriterionEqual('nameSort', name)
+    );
 
-    if (name != null) {
-      let nameField = PersonSpec.prop('name');
-      let nameSortField = PersonSpec.prop('nameSort');
+    let relationCrit = relation == null ? null : new CriterionHasRelationWith(
+        new CriterionEqual('relation', relation)
+    );
 
-      let binding1 = uniqueBoundName(),
-          binding2 = uniqueBoundName();
-      where.addRaw(`(${nameField.column} = ${binding1} OR ${nameSortField.column} = ${binding2})`, {
-        [binding1]: nameField.toDb(name),
-        [binding2]: nameSortField.toDb(name)
-      });
+    let crit: Criterion|undefined;
+    if (nameCrit == null && relationCrit == null) {
+      crit = undefined;
+    } else if (nameCrit != null && relationCrit != null) {
+      crit = new CriterionAnd(nameCrit, relationCrit);
+    } else {
+      crit = nameCrit ? nameCrit : relationCrit as Criterion;
     }
 
-    if (relation != null) {
-      let relationField = PersonRelationSpec.prop('relation');
+    return this.findPersonsByCriteria(crit, options);
+  }
 
-      let binding = uniqueBoundName();
-      where.addRaw(`uuid IN (SELECT person_id FROM res_to_persons WHERE ${relationField.column} = ${binding})`, {
-        [binding]: relationField.toDb(relation)
-      });
-    }
-
+  /**
+   * Get list of persons matching specified criteria.
+   * Use the function without arguments to get list of all persons registered in the database.
+   * @param what Search criteria.
+   * @param {ListOptions} options Sorting and pagination options
+   * @returns {Promise<Person[]>}
+   */
+  async findPersonsByCriteria(what?: Criterion, options?: ListOptions): Promise<Person[]> {
+    let crit = this._evalCriterion(what, PersonSpec, PersonRelationSpec);
+    let computedWhere = crit.sql ? 'WHERE ' + crit.sql : '';
     let limits = LibraryDatabase._limits('nameSort', options, PersonSpec);
 
-    let rows = await this.db.all(`SELECT * FROM persons ${where.clause} ${limits}`, where.bound);
-    return rows.map(row => PersonSpec.rowToEntry(row));
+    return (await this.db.all(`SELECT * FROM persons ${computedWhere} ${limits}`, crit.bound)).map(row => PersonSpec.rowToEntry(row));
   }
 
   /**
@@ -863,33 +891,40 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {string} text Groups with title or titleSort equal to this value are going to be included in result set.
    * @param {GroupType | string} groupType Groups with given group type are going to be included in result set.
    * @param {ListOptions} options Sorting and pagination options.
-   * @returns {Promise<Group[]>} List of groups matching request.
+   * @returns {Promise<Group[]>} List of groups matching the request.
    */
   async findGroups(text?: string, groupType?: GroupType|string, options?: ListOptions): Promise<Group[]> {
-    let where = new WhereClauseBuilder();
+    let textCrit = text == null ? null : new CriterionOr(
+        new CriterionEqual('title', text),
+        new CriterionEqual('titleSort', text)
+    );
 
-    if (text != null) {
-      let titleField = this._groupSpec.prop('title');
-      let titleSortField = this._groupSpec.prop('titleSort');
+    let groupCrit = groupType == null ? null : new CriterionEqual('groupType', groupType);
 
-      let binding1 = uniqueBoundName(),
-          binding2 = uniqueBoundName();
-
-      where.addRaw(`(${titleField.column} = ${binding1} OR ${titleSortField.column} = ${binding2})`, {
-        [binding1]: titleField.toDb(text),
-        [binding2]: titleSortField.toDb(text)
-      });
+    let crit: Criterion|undefined;
+    if (textCrit == null && groupCrit == null) {
+      crit = undefined;
+    } else if (textCrit != null && groupCrit != null) {
+      crit = new CriterionAnd(textCrit, groupCrit);
+    } else {
+      crit = textCrit ? textCrit : groupCrit as Criterion;
     }
 
-    if (groupType != null) {
-      let groupTypeField = this._groupSpec.prop('groupType');
-      where.add(groupTypeField.column, groupTypeField.toDb(groupType));
-    }
+    return this.findGroupsByCriteria(crit, options);
+  }
 
+  /**
+   * Returns list of groups matching given criteria.
+   * @param {Criterion} what Search criteria
+   * @param {ListOptions} options Sorting and pagination options
+   * @returns {Promise<Group[]>} List of groups matching the request.
+   */
+  async findGroupsByCriteria(what?: Criterion, options?: ListOptions): Promise<Group[]> {
+    let crit = this._evalCriterion(what, this._groupSpec, GroupRelationSpec);
+    let computedWhere = crit.sql ? 'WHERE ' + crit.sql : crit.sql;
     let limits = LibraryDatabase._limits('titleSort', options, this._groupSpec);
 
-    let rows = await this.db.all(`SELECT * FROM groups ${where.clause} ${limits}`, where.bound);
-    return rows.map((row: any): Group => this._groupSpec.rowToEntry(row));
+    return (await this.db.all(`SELECT * FROM groups ${computedWhere} ${limits}`, crit.bound)).map(row => this._groupSpec.rowToEntry(row));
   }
 
   /**
@@ -1566,7 +1601,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return [propName, propExtra];
   };
 
-  protected _evalCriterion(crit: Criterion|null|undefined, spec: EntrySpec,
+  protected _evalCriterion(crit: Criterion|null|undefined, spec: EntrySpec, linkSpec?: EntrySpec|null,
                            inContext?: EvalCriterionContext): EvalCriterionResult {
     let result: EvalCriterionResult = {
       sql: '',
@@ -1621,7 +1656,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
           throw new Error(`Invalid search criterion: no property named ${prop} has been found`);
         }
       } else if (arg instanceof Criterion) {
-        let subResult = this._evalCriterion(arg, spec, { });
+        let subResult = this._evalCriterion(arg, spec, linkSpec, { });
         Object.assign(result.bound, subResult.bound);
         result.personsJoin = result.personsJoin || subResult.personsJoin;
         result.groupsJoin = result.groupsJoin || subResult.groupsJoin;
@@ -1638,16 +1673,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     switch (crit.op) {
       case Operator.Equal: {
-        // we should evaluate property argument first
-        let left: string, right: string;
-
-        if (crit.args[0] instanceof CriterionProp) {
-          left = computeArg(crit.args[0], crit, 0);
-          right = computeArg(crit.args[1], crit, 1);
-        } else {
-          right = computeArg(crit.args[1], crit, 1);
-          left = computeArg(crit.args[0], crit, 0);
-        }
+        let left = computeArg(crit.args[0], crit, 0);
+        let right = computeArg(crit.args[1], crit, 1);
 
         result.sql = `${left} = ${right}`;
       } break;
@@ -1659,6 +1686,21 @@ export class LibraryDatabase extends DatabaseWithOptions {
       case Operator.Or: {
         result.sql = crit.args.map((arg, i) => '(' + computeArg(arg, crit as Criterion, i) + ')').join(' OR ');
       } break;
+
+      case Operator.HasRelationWith: {
+        if (!linkSpec) {
+          throw new Error('Search criterion is invalid: you cannot use HasRelationWith on this query');
+        }
+        let subResult = this._evalCriterion(crit.args[0] as Criterion, linkSpec);
+        Object.assign(result.bound, subResult.bound);
+        let viewTable = linkSpec.table + '_view';
+        let computedWhere = subResult.sql ? 'WHERE ' + subResult.sql : '';
+        result.sql = `uuid IN (SELECT ${viewTable}.linked_id FROM ${viewTable} ${computedWhere})`
+      } break;
+
+      default: {
+        throw new Error('Search criterion is invalid: unknown operator');
+      }
     }
 
     return result;
