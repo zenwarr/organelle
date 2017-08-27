@@ -237,6 +237,36 @@ export enum ObjectRole {
   Format = 1
 }
 
+const ROLE_NAMES = [ 'format' ];
+
+/**
+ * Converts a member of PersonRelation enum to string representation suitable for transferring values.
+ * @param {PersonRelation} relation Relation value
+ * @returns {string} String representation
+ */
+export function objectRoleToString(role: ObjectRole): string {
+  --role;
+  if (role >= 0 && role < ROLE_NAMES.length) {
+    return ROLE_NAMES[role];
+  } else {
+    throw new Error();
+  }
+}
+
+/**
+ * Converts string representation of PersonRelation back to enumeration member.
+ * @param {string} text String representation of the value
+ * @returns {PersonRelation} Enumeration value
+ */
+export function objectRoleFromString(text: string): ObjectRole {
+  let index = ROLE_NAMES.indexOf(text.toLowerCase().trim());
+  if (index >= 0) {
+    return index + 1;
+  } else {
+    throw new Error();
+  }
+}
+
 export interface RelatedObject {
   rowId?: number;
   resourceUuid?: string;
@@ -745,7 +775,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {ListOptions} options Sorting and pagination options
    * @returns {Promise<Person[]>}
    */
-  async findPersonsByCriteria(what?: Criterion, options?: ListOptions): Promise<Person[]> {
+  async findPersonsByCriteria(what?: Criterion|null, options?: ListOptions): Promise<Person[]> {
     let crit = this._evalCriterion(what, PersonSpec, PersonRelationSpec);
     let computedWhere = crit.sql ? 'WHERE ' + crit.sql : '';
     let limits = LibraryDatabase._limits('nameSort', options, PersonSpec);
@@ -919,7 +949,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param {ListOptions} options Sorting and pagination options
    * @returns {Promise<Group[]>} List of groups matching the request.
    */
-  async findGroupsByCriteria(what?: Criterion, options?: ListOptions): Promise<Group[]> {
+  async findGroupsByCriteria(what?: Criterion|null, options?: ListOptions): Promise<Group[]> {
     let crit = this._evalCriterion(what, this._groupSpec, GroupRelationSpec);
     let computedWhere = crit.sql ? 'WHERE ' + crit.sql : crit.sql;
     let limits = LibraryDatabase._limits('titleSort', options, this._groupSpec);
@@ -1043,28 +1073,27 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param options Sorting and pagination options
    * @returns {Promise<RelatedPerson[]>} List of relations between persons and this resource.
    */
-  async relatedPersons(resource: Resource|string, relation?: PersonRelation, options?: ListOptions): Promise<RelatedPerson[]> {
-    let whereClause = new WhereClauseBuilder();
+  async relatedPersons(resource: Resource|string, relation?: PersonRelation|Criterion|null, options?: ListOptions): Promise<RelatedPerson[]> {
+    resource = Database.getId(resource);
 
-    whereClause.add('res_id', Database.getId(resource));
-    if (relation != null) {
-      whereClause.add('relation', PersonRelationSpec.prop('relation').toDb(relation));
+    let crit: Criterion|null = null;
+    if (typeof relation === 'number') {
+      crit = new CriterionEqual('relation', relation);
+    } else if (relation != null) {
+      crit = relation;
     }
 
-    let limits = LibraryDatabase._limits('nameSort', options, PersonSpec, PersonRelationSpec);
+    let critEval = this._evalCriterion(crit, PersonRelationViewSpec);
+    let computedWhere = critEval.sql ? 'AND (' + critEval.sql + ')' : '';
+    let limits = LibraryDatabase._limits('nameSort', options, PersonRelationViewSpec);
 
-    let rows: any[] = await this.db.all(
-        `SELECT relation, uuid, name, name_sort FROM res_to_persons INNER JOIN persons ON res_to_persons.person_id = persons.uuid ${whereClause.clause} ${limits}`,
-        whereClause.bound);
+    let rows: any[] = await this.db.all(`SELECT * FROM res_to_persons_view WHERE res_id = :resource ${computedWhere} ${limits}`,
+        Object.assign({
+          [':resource']: resource
+        }, critEval.bound)
+    );
 
-    let results: RelatedPerson[] = [];
-    for (let row of rows) {
-      let person = PersonSpec.rowToEntry<RelatedPerson>(row);
-      PersonRelationSpec.rowToEntry(row, person);
-      results.push(person);
-    }
-
-    return results;
+    return rows.map(row => PersonRelationViewSpec.rowToEntry<RelatedPerson>(row));
   }
 
   /**
@@ -1201,39 +1230,34 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @param options Sorting and pagination options.
    * @returns {Promise<RelatedGroup[]>}
    */
-  async relatedGroups(resource: Resource|string, groupType?: GroupType|string,
+  async relatedGroups(resource: Resource|string, groupType?: GroupType|string|Criterion|null,
                       options?: ListOptions): Promise<RelatedGroup[]> {
-    let whereClause = new WhereClauseBuilder();
-
-    whereClause.add('res_id', Database.getId(resource));
-
+    let crit: Criterion|null = null;
     if (typeof groupType === 'string') {
-      let fetchedGroupType = this.getGroupType(groupType) as (GroupType|undefined);
-      if (!groupType) {
+      let fetchedGroupType = this.getGroupType(groupType);
+      if (!fetchedGroupType) {
         throw new Error(`No group type with UUID [${groupType}] exist`);
       }
-      groupType = fetchedGroupType;
+      crit = new CriterionEqual('groupType', fetchedGroupType);
+    } else if (groupType instanceof Criterion) {
+      crit = groupType;
+    } else if (groupType != null) {
+      crit = new CriterionEqual('groupType', groupType);
     }
 
-    if (groupType != null) {
-      let binding = uniqueBoundName();
-      whereClause.addRaw(`group_id IN (SELECT uuid FROM groups WHERE type = ${binding})`, {
-        [binding]: groupType.uuid
-      });
-    }
+    let critEval = this._evalCriterion(crit, this._groupRelationViewSpec);
+    let computedWhere = critEval.sql ? 'AND (' + critEval.sql + ')' : '';
+    let limits = LibraryDatabase._limits('titleSort', options, this._groupRelationViewSpec);
 
-    let limits = LibraryDatabase._limits('titleSort', options, this._groupSpec, GroupRelationSpec);
-
-    let rows: any[] =
-        await this.db.all(`SELECT group_index, relation_tag, uuid, type, title, title_sort FROM res_to_groups ` +
-        `INNER JOIN groups ON res_to_groups.group_id = groups.uuid ${whereClause.clause} ${limits}`,
-        whereClause.bound);
+    let rows: any[] = await this.db.all(`SELECT * FROM res_to_groups_view WHERE res_id = :resource ${computedWhere} ${limits}`,
+        Object.assign({
+          [':resource']: resource
+        }, critEval.bound)
+    );
 
     let results: RelatedGroup[] = [];
     for (let row of rows) {
-      let group = this._groupSpec.rowToEntry<RelatedGroup>(row);
-      GroupRelationSpec.rowToEntry(row, group);
-      results.push(group);
+      results.push(this._groupRelationViewSpec.rowToEntry<RelatedGroup>(row));
     }
 
     return results;
@@ -1243,26 +1267,28 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * Get list of object a resource relates to.
    * @param {Resource | string} resource UUID of a resource
    * @param {ObjectRole} role If specified, only relations with specified role will be returned.
-   * @param {string} tag If specified, only relations with specified tag will be returned.
    * @param {ListOptions} options Sorting and pagination options.
    * @returns {Promise<RelatedObject[]>}
    */
-  async relatedObjects(resource: Resource|string, role?: ObjectRole, tag?: string, options?: ListOptions): Promise<RelatedObject[]> {
-    let whereClause = new WhereClauseBuilder();
+  async relatedObjects(resource: Resource|string, role?: ObjectRole|Criterion|null, options?: ListOptions): Promise<RelatedObject[]> {
+    resource = Database.getId(resource);
 
-    whereClause.add('res_id', Database.getId(resource));
-    if (role != null) {
-      whereClause.add('role', ObjectSpec.prop('role').toDb(role));
+    let crit: Criterion|null = null;
+    if (typeof role === 'number') {
+      crit = new CriterionEqual('role', role);
+    } else if (role instanceof Criterion) {
+      crit = role;
     }
-    if (tag != null) {
-      whereClause.add('tag', ObjectSpec.prop('tag').toDb(tag));
-    }
 
-    let limits = LibraryDatabase._limits('tag', options, ObjectSpec);
+    let critEval = this._evalCriterion(crit, ObjectSpec);
+    let computedWhere = critEval.sql ? 'AND (' + critEval.sql + ')' : '';
+    let limits = LibraryDatabase._limits(['tag', 'uuid'], options, ObjectSpec);
 
-    let rows = await this.db.all(`SELECT id, uuid, res_id, role, tag ` +
-                                  `FROM objects ${whereClause.clause} ${limits}`,
-        whereClause.bound);
+    let rows: any[] = await this.db.all(`SELECT * FROM objects WHERE res_id = :resource ${computedWhere} ${limits}`,
+        Object.assign({
+          [':resource']: resource
+        }, critEval.bound)
+    );
 
     return rows.map(row => ObjectSpec.rowToEntry<RelatedObject>(row));
   }
@@ -1328,6 +1354,19 @@ export class LibraryDatabase extends DatabaseWithOptions {
     }
   }
 
+  async findObjectsByCriteria(what?: Criterion|null, options?: ListOptions): Promise<RelatedObject[]> {
+    let crit = this._evalCriterion(what, ObjectSpec);
+    let computedWhere = crit.sql ? 'WHERE ' + crit.sql : '';
+    let limits = LibraryDatabase._limits(['tag', 'uuid'], options, ObjectSpec);
+
+    return (await this.db.all(`SELECT * FROM objects ${computedWhere} ${limits}`, crit.bound)).map(row => ObjectSpec.rowToEntry(row));
+  }
+
+  async getObjectsTags(options?: ListOptions): Promise<string[]> {
+    let limits = LibraryDatabase._limits('tag', options, ObjectSpec);
+    return (await this._db.all(`SELECT DISTINCT tag FROM objects ${limits}`)).map(row => row.tag);
+  }
+
   /** Protected area **/
 
   protected _groupTypes: GroupType[] = [];
@@ -1337,6 +1376,23 @@ export class LibraryDatabase extends DatabaseWithOptions {
       new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
       new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
       new GroupTypeFieldSpec('groupType', 'type', this)
+  ]);
+
+  protected _groupRelationViewSpec = new EntrySpec('res_to_groups_view', 'resources to groups view', [
+      new UuidFieldSpec('uuid', 'linked_id'),
+      new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
+      new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
+      new GroupTypeFieldSpec('groupType', 'type', this),
+      new GenericFieldSpec('groupIndex', 'group_index',
+          PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
+          PropValidators.Number,
+          (value: any): any => value == null ? -1 : value,
+          (value: any): any => value < 0 ? null : value),
+      new GenericFieldSpec('relationTag', 'relation_tag',
+          PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+          PropValidators.String,
+          (value: any): any => value == null ? '' : value,
+          (value: any): any => value == null ? null : value)
   ]);
 
   protected async _loadGroupTypes(): Promise<void> {
@@ -1463,7 +1519,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return `${tablePrefix}${columnName} COLLATE NOCASE ${sortMode}`;
   }
 
-  protected static _limits(prefSortProp: string, options?: ListOptions, ...specs: EntrySpec[]): string {
+  protected static _limits(prefSortProp: string|string[], options?: ListOptions, ...specs: EntrySpec[]): string {
     let resultParts: string[] = [];
 
     if (specs.length > 0) {
@@ -1479,7 +1535,13 @@ export class LibraryDatabase extends DatabaseWithOptions {
       if (!sortParts.length || !options || !options.sortProps ||
           !options.sortProps.some(sortProp => sortProp.propName === prefSortProp)) {
         let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
-        sortParts.push(this._makeSort(null, prefSortProp, mode, ...specs));
+        if (Array.isArray(prefSortProp)) {
+          for (let prop of prefSortProp) {
+            sortParts.push(this._makeSort(null, prop, mode, ...specs));
+          }
+        } else {
+          sortParts.push(this._makeSort(null, prefSortProp, mode, ...specs));
+        }
       }
 
       resultParts.push('ORDER BY ' + sortParts.join(', '));
@@ -1498,19 +1560,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
   }
 
   protected static _normalizeSortProp(prop: string): string[] {
-    let propName: string, propExtra: string;
-    let hashIndex = prop.indexOf('#');
-    if (hashIndex >= 0) {
-      propName = prop.slice(0, hashIndex).trim();
-      propExtra = prop.slice(hashIndex + 1).trim();
-
-      if (!propExtra) {
-        throw new Error(`Invalid sort property: ${prop}`);
-      }
-    } else {
-      propName = prop;
-      propExtra = '';
-    }
+    let [propName, propExtra] = this._splitProp(prop);
 
     if (!propExtra) {
       switch (propName.toLowerCase().trim()) {
@@ -1545,7 +1595,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     return [propName, propExtra];
   }
 
-  protected static _normalizeCriterionProp(prop: string): string[] {
+  protected static _splitProp(prop: string): string[] {
     let hashIndex = prop.indexOf('#');
 
     let propName: string, propExtra: string;
@@ -1555,12 +1605,18 @@ export class LibraryDatabase extends DatabaseWithOptions {
       propExtra = prop.slice(hashIndex + 1);
 
       if (!propExtra) {
-        throw new Error(`Invalid search criteria: ${prop}`);
+        throw new Error(`Invalid property name: ${prop}`);
       }
     } else {
       propName = prop;
       propExtra = '';
     }
+
+    return [propName, propExtra];
+  }
+
+  protected static _normalizeCriterionProp(prop: string): string[] {
+    let [propName, propExtra] = this._splitProp(prop);
 
     switch (propName.toLowerCase().trim()) {
       case 'author':
@@ -1624,15 +1680,13 @@ export class LibraryDatabase extends DatabaseWithOptions {
         if (spec.propSupported(prop)) {
           return (context.field = spec.prop(prop)).column;
         } else if (spec === ResourceSpec) {
-          let [propName, propExtra] = LibraryDatabase._normalizeCriterionProp(prop);
+          let [propName, propExtra] = LibraryDatabase._splitProp(prop);
 
           switch (propName) {
             case 'persons': {
               result.personsJoin = true;
-              if (PersonSpec.propSupported(propExtra)) {
-                return 'persons.' + (context.field = PersonSpec.prop(propExtra)).column;
-              } else if (PersonRelationSpec.propSupported(propExtra)) {
-                return 'persons.' + (context.field = PersonRelationSpec.prop(propExtra)).column;
+              if (PersonRelationViewSpec.propSupported(propExtra)) {
+                return 'persons.' + (context.field = PersonRelationViewSpec.prop(propExtra)).column;
               } else {
                 throw new Error(`Invalid search criterion: ${prop}`);
               }
@@ -1640,10 +1694,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
             case 'groups': {
               result.groupsJoin = true;
-              if (this._groupSpec.propSupported(propExtra)) {
-                return 'groups.' + (context.field = this._groupSpec.prop(propExtra)).column;
-              } else if (GroupRelationSpec.propSupported(propExtra)) {
-                return 'groups.' + (context.field = GroupRelationSpec.prop(propExtra)).column;
+              if (this._groupRelationViewSpec.propSupported(propExtra)) {
+                return 'groups.' + (context.field = this._groupRelationViewSpec.prop(propExtra)).column;
               } else {
                 throw new Error(`Invalid search criterion: ${prop}`);
               }
@@ -1731,14 +1783,16 @@ export class LibraryDatabase extends DatabaseWithOptions {
             arg.prop = buildProp('persons', propExtra);
             let result = new CriterionAnd(crit, new CriterionEqual('persons#relation', PersonRelation.Author));
             return this._normalizeCriterion(result, spec);
+          } else {
+            let groupType = this.getGroupTypeByName(propName);
+            if (groupType) {
+              arg.prop = buildProp('groups', propExtra);
+              let result = new CriterionAnd(crit, new CriterionEqual('groups#groupType', groupType));
+              return this._normalizeCriterion(result, spec);
+            }
           }
 
-          let groupType = this.getGroupTypeByName(propExtra);
-          if (groupType) {
-            arg.prop = buildProp('groups', propExtra);
-            let result = new CriterionAnd(crit, new CriterionEqual('groups#groupType', groupType));
-            return this._normalizeCriterion(result, spec);
-          }
+          arg.prop = buildProp(propName, propExtra);
         } else if (arg instanceof Criterion) {
           crit.args[j] = this._normalizeCriterion(arg, spec);
         }
@@ -2039,6 +2093,13 @@ const PersonRelationSpec = new EntrySpec('res_to_persons', 'person relation', [
   res_id: 'resources',
   person_id: 'persons'
 });
+
+const PersonRelationViewSpec = new EntrySpec('res_to_persons_view', 'person relation view', [
+  new UuidFieldSpec('uuid', 'linked_id'),
+  new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number),
+  new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
+  new GenericFieldSpec('nameSort', 'name_sort', PropValidators.String, PropValidators.String)
+]);
 
 const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
   new GenericFieldSpec('groupIndex', 'group_index',

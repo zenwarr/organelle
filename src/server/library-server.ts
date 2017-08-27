@@ -3,7 +3,11 @@ import * as restify from 'restify';
 import * as restifyErrors from 'restify-errors';
 import {Database} from "./db";
 import {
-  Group, GroupType, ListOptions, Person, PersonRelation, personRelationFromString, personRelationToString,
+  Criterion, CriterionAnd, CriterionEqual, CriterionHasRelationWith, CriterionOr,
+  Group, GroupType, ListOptions, ObjectRole, objectRoleFromString, objectRoleToString, Person, PersonRelation,
+  personRelationFromString,
+  personRelationToString,
+  RelatedGroup, RelatedObject,
   RelatedPerson,
   Resource, SortMode
 } from "./library-db";
@@ -44,7 +48,7 @@ export class LibraryServer {
   protected _initRoutes(): void {
     let self = this;
 
-    function wrap(func: (...args: string[]) => Promise<any>) {
+    function wrap(func: (...args: any[]) => Promise<any>) {
       return function(req: restify.Request, resp: restify.Response, next: restify.Next) {
         func.call(self, req.params, req.query).then((apiResponse: any) => {
           resp.json(200, apiResponse);
@@ -59,11 +63,79 @@ export class LibraryServer {
       }
     }
 
+    // list of all registered resources
     this._server.get('/resources/', wrap(this._handleResources));
-    this._server.get('/resources/:uuid/', wrap(this._handleResource));
-    this._server.get('/resources/:uuid/persons/', wrap(this._handleRelatedPersons));
-    this._server.get('/authors/', wrap(this._handleAuthors));
-    this._server.get('/tags/', wrap(this._handleTags));
+
+    // a single resource with uuid
+    this._server.get('/resource/:uuid/', wrap(this._handleResource));
+
+    // related persons of a single resource
+    this._server.get('/resource/:uuid/persons/', wrap(this._handleRelatedPersons));
+
+    // related persons of a specific relation (or of multiple relations) of a single resource
+    this._server.get('/resource/:uuid/persons/:relations/', wrap(this._handleRelatedPersons));
+
+    // related groups of a single resource
+    this._server.get('/resource/:uuid/groups/', wrap(this._handleRelatedGroups));
+
+    // related groups of a specific type (types) of a single resource
+    this._server.get('/resource/:uuid/groups/:groupTypes/', wrap(this._handleRelatedGroups));
+
+    // list of objects related to a single resource
+    this._server.get('/resource/:uuid/objects/', wrap(this._handleRelatedObjects));
+
+    // list of objects with a specific tag related to a single resource
+    this._server.get('/resource/:uuid/objects/:tags/', wrap(this._handleRelatedObjects));
+
+    // list of objects with specific role that are related to the resource
+    this._server.get('/resource/:uuid/objects/roles/:roles/', wrap(this._handleRelatedObjects));
+
+    // list of objects with specific tags and roles that are related to the resource
+    this._server.get('/resource/:uuid/objects/:tags/roles/:roles/', wrap(this._handleRelatedObjects));
+
+    // list of all registered groups
+    this._server.get('/groups/', wrap(this._handleGroups));
+
+    // list of groups of a specific group type (or multiple types)
+    this._server.get('/groups/types/:groupTypes/', wrap(this._handleGroups));
+
+    // list of resources that have relations with groups of specific types
+    this._server.get('/groups/types/:groupTypes/resources/', wrap(this._handleGroupsResources));
+
+    // a single group with uuid
+    this._server.get('/group/:uuid/', wrap(this._handleGroup));
+
+    // list of resources that have relations with a specific group
+    this._server.get('/group/:uuid/resources/', wrap(this._handleGroupsResources));
+
+    // list of all registered persons
+    this._server.get('/persons/', wrap(this._handlePersons));
+
+    // list of persons that have at least one relation with specific relation (or one of multiple relations)
+    this._server.get('/persons/relations/:relations', wrap(this._handlePersons));
+
+    // list of resources that have specific relation with persons
+    this._server.get('/persons/relations/:relations/resources', wrap(this._handlePersonResources));
+
+    // a single persons with specific uuid
+    this._server.get('/person/:uuid', wrap(this._handlePerson));
+
+    // list of resources that have relations with the person
+    this._server.get('/person/:uuid/resources/', wrap(this._handlePersonResources));
+
+    // list of resources that have a relation of specific type with the person
+    this._server.get('/person/:uuid/relations/:relations/resources', wrap(this._handlePersonResources));
+
+    // list of all registered objects
+    this._server.get('/objects/', wrap(this._handleObjects));
+
+    // list of all tags that related objects in the library database have
+    this._server.get('/objects/tags/', wrap(this._handleObjectsTags));
+
+    // list related objects with specific tag
+    this._server.get('/objects/tags/:tags/', wrap(this._handleObjects));
+
+    // this._server.get('/object/:uuid/', wrap(this._handleObject));
   }
 
   protected _resourceToResponse(resource: Resource): any {
@@ -110,64 +182,237 @@ export class LibraryServer {
     };
   }
 
+  protected _relatedGroupToResponse(group: RelatedGroup): any {
+    return {
+      uuid: group.uuid,
+      type: 'related_group',
+      title: group.title,
+      titleSort: group.titleSort,
+      groupIndex: group.groupIndex,
+      relationTag: group.relationTag
+    };
+  }
+
+  protected _relatedObjectToReponse(object: RelatedObject): any {
+    return {
+      uuid: object.uuid,
+      type: 'related_object',
+      role: objectRoleToString(object.role as ObjectRole),
+      tag: object.tag
+    };
+  }
+
+  protected _objectTagToResponse(tag: string): any {
+    return {
+      type: 'object_tag',
+      tag: tag
+    };
+  }
+
   protected async _handleResources(params: any, query: any): Promise<any> {
     let opts = this._listOptionsFromQuery(query);
     return (await this._lib.libraryDatabase.findResourcesByCriteria(null, opts)).map(value => this._resourceToResponse(value));
   }
 
-  protected async _handleResource(params: any): Promise<any> {
-    let uuid: string = params.uuid;
-
-    try {
-      uuid = Database.validateId(uuid);
-    } catch (err) {
-      throw new restifyErrors.BadRequestError(`Invalid resource identifier`);
-    }
+  protected async _handleResource(params: { uuid?: string }): Promise<any> {
+    let uuid: string = this._extractUuid(params);
 
     let resource = await this._lib.libraryDatabase.getResource(uuid);
     if (resource == null) {
-      throw new restifyErrors.NotFoundError('Resource does not exist');
+      throw new restifyErrors.ResourceNotFoundError('Resource does not exist');
     }
 
     return this._resourceToResponse(resource);
   }
 
-  protected async _handleAuthors(): Promise<any> {
-    return (await this._lib.libraryDatabase.findAuthors()).map(value => this._personToResponse(value));
-  }
+  protected async _handleRelatedPersons(params: { uuid?: string, relations?: string }, query: any): Promise<any> {
+    let resource: string = this._extractUuid(params);
 
-  protected async _handleTags(): Promise<any> {
-    return (await this._lib.libraryDatabase.findTags()).map(x => this._groupToResponse(x));
-  }
-
-  protected async _handleRelatedPersons(params: any, query: any): Promise<any> {
-    let resource: string = params.uuid;
-
-    try {
-      resource = Database.validateId(resource);
-    } catch (err) {
-      throw new restifyErrors.BadRequestError(`Invalid resource identifier`);
+    let crit: Criterion|null = null;
+    if (params.relations != null) {
+      crit = this._relationsCriterion(params.relations);
     }
 
-    let relation: PersonRelation|undefined = undefined;
+    let options = this._listOptionsFromQuery(query);
 
-    if (query.relation != null) {
-      if (typeof query.relation !== 'string') {
-        throw new restifyErrors.BadRequestError('Multiple person relations are not supported');
+    return (await this._lib.libraryDatabase.relatedPersons(resource, crit, options)).map(x => this._relatedPersonToResponse(x));
+  }
+
+  protected async _handleRelatedGroups(params: { uuid?: string, groupTypes?: string }, query: any): Promise<any> {
+    let resource: string = this._extractUuid(params);
+
+    let crit: Criterion|null = null;
+    if (params.groupTypes != null) {
+      crit = this._groupTypesCriterion(params.groupTypes);
+    }
+
+    let options = this._listOptionsFromQuery(query);
+
+    return (await this._lib.libraryDatabase.relatedGroups(resource, crit, options)).map(x => this._relatedGroupToResponse(x));
+  }
+
+  protected async _handleRelatedObjects(params: { uuid?: string, roles?: string, tags?: string }, query: any): Promise<any> {
+    let resource: string = this._extractUuid(params);
+
+    let crit: Criterion|null = null;
+    if (params.tags != null) {
+      if (typeof params.tags !== 'string') {
+        throw new restifyErrors.BadRequestError('Invalid tags');
       }
 
+      let tags: string[] = params.tags.split(',').map(input => input.trim());
+
+      crit = new CriterionOr(...tags.map(tag => new CriterionEqual('tag', tag)));
+    }
+
+    if (params.roles != null) {
+      if (typeof params.roles !== 'string') {
+        throw new restifyErrors.BadRequestError('Invalid roles');
+      }
+
+      let roles: ObjectRole[];
       try {
-        relation = query.relation ? personRelationFromString(query.relation) : undefined;
+        roles = params.roles.split(',').map(input => objectRoleFromString(input));
       } catch (err) {
-        throw new restifyErrors.BadRequestError('Invalid person relation');
+        throw new restifyErrors.BadRequestError('Invalid object role');
       }
+
+      let roleCrit = new CriterionOr(...roles.map(role => new CriterionEqual('role', role)));
+      crit = crit == null ? roleCrit : new CriterionAnd(crit, roleCrit);
     }
 
-    return (await this._lib.libraryDatabase.relatedPersons(resource, relation)).map(x => this._relatedPersonToResponse(x));
+    let options = this._listOptionsFromQuery(query);
+
+    return (await this._lib.libraryDatabase.relatedObjects(resource, crit, options)).map(x => this._relatedObjectToReponse(x));
   }
 
-  protected async _handleRelatedAuthors(params: any, query: any): Promise<any> {
-    return this._handleRelatedPersons(params, { ...query, relation: 'author' });
+  protected async _handleGroups(params: { groupTypes?: string }, query: any): Promise<any> {
+    let crit: Criterion|null = null;
+    if (params.groupTypes != null) {
+      crit = this._groupTypesCriterion(params.groupTypes);
+    }
+
+    let options = this._listOptionsFromQuery(query);
+
+    return (await this._lib.libraryDatabase.findGroupsByCriteria(crit, options)).map(group => this._groupToResponse(group));
+  }
+
+  protected async _handleGroup(params: { uuid?: string }, query: any): Promise<any> {
+    let uuid: string = this._extractUuid(params);
+
+    let group = await this._lib.libraryDatabase.getGroup(uuid);
+    if (!group) {
+      throw new restifyErrors.ResourceNotFoundError();
+    }
+
+    return this._groupToResponse(group);
+  }
+
+  protected async _handleGroupsResources(params: { uuid?: string, groupTypes?: string }, query: any): Promise<any> {
+    let crit: Criterion|null = null;
+    if (params.uuid != null) {
+      crit = new CriterionEqual('groups#uuid', this._extractUuid(params));
+    } else if (params.groupTypes != null) {
+      let gtCrit = this._groupTypesCriterion(params.groupTypes, 'groups');
+      crit = crit == null ? gtCrit : new CriterionAnd(crit, gtCrit);
+    } else {
+      throw new restifyErrors.BadRequestError('No uuid and no group types specified in the request');
+    }
+
+    let options = this._listOptionsFromQuery(query);
+
+    return (await this._lib.libraryDatabase.findResourcesByCriteria(crit)).map(x => this._resourceToResponse(x));
+  }
+
+  protected async _handlePersons(params: { relations?: string }, query: any): Promise<any> {
+    let crit: Criterion|null = null;
+    if (params.relations != null) {
+      crit = new CriterionHasRelationWith(this._relationsCriterion(params.relations));
+    }
+
+    let options = this._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findPersonsByCriteria(crit, options)).map(x => this._personToResponse(x));
+  }
+
+  protected async _handlePersonResources(params: { uuid?: string, relations?: string }, query: any): Promise<any> {
+    let crit: Criterion|null = null;
+
+    if (params.uuid != null) {
+      crit = new CriterionEqual('persons#uuid', this._extractUuid(params));
+    }
+
+    if (params.relations != null) {
+      let relCrit = this._relationsCriterion(params.relations, 'persons');
+      crit = crit == null ? relCrit : new CriterionAnd(crit, relCrit);
+    }
+
+    let options = this._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findResourcesByCriteria(crit, options)).map(x => this._resourceToResponse(x));
+  }
+
+  protected async _handlePerson(params: { uuid?: string}, query: any): Promise<any> {
+    let uuid: string = this._extractUuid(params);
+    let person = await this._lib.libraryDatabase.getPerson(uuid);
+    if (!person) {
+      throw new restifyErrors.ResourceNotFoundError(`Person does not exist`);
+    }
+    return this._personToResponse(person);
+  }
+
+  protected async _handleObjects(params: { tags?: string }, query: any): Promise<any> {
+    let crit: Criterion|null = null;
+
+    if (params.tags != null) {
+      if (typeof params.tags !== 'string') {
+        throw new restifyErrors.BadRequestError('Invalid object tags');
+      }
+
+      let tagList = params.tags.split(',').map(tag => tag.toLowerCase().trim());
+
+      crit = new CriterionOr(...tagList.map(tag => new CriterionEqual('tag', tag)));
+    }
+
+    let options = this._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findObjectsByCriteria(crit, options)).map(x => this._relatedObjectToReponse(x));
+  }
+
+  protected async _handleObjectsTags(params: any, query: any): Promise<any> {
+    let options = this._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.getObjectsTags(options)).map(x => this._objectTagToResponse(x));
+  }
+
+  protected _groupTypesCriterion(gtNames: string, prefix?: string): Criterion {
+    if (typeof gtNames !== 'string') {
+      throw new restifyErrors.BadRequestError('Invalid group types');
+    }
+
+    let groupTypes = gtNames.split(',').map(gt => {
+      let groupType = this._lib.libraryDatabase.getGroupTypeByName(gt);
+      if (!groupType) {
+        throw new restifyErrors.BadRequestError(`Invalid group type name: ${gt}`);
+      }
+      return groupType;
+    });
+
+    let prop = prefix ? prefix + '#groupType' : 'groupType';
+    return new CriterionOr(...groupTypes.map(groupType => new CriterionEqual(prop, groupType)));
+  }
+
+  protected _relationsCriterion(relationNames: string, prefix?: string): Criterion {
+    if (typeof relationNames !== 'string') {
+      throw new restifyErrors.BadRequestError('Invalid person relation');
+    }
+
+    let relationList: PersonRelation[] = relationNames.split(',').map(input => {
+      try {
+        return personRelationFromString(input);
+      } catch (err) {
+        throw new restifyErrors.BadRequestError(`Invalid person relation: ${input}`);
+      }
+    });
+
+    let prop = prefix ? prefix + '#relation' : 'relation';
+    return new CriterionOr(...relationList.map(relation => new CriterionEqual(prop, relation)));
   }
 
   protected _listOptionsFromQuery(query: any): ListOptions {
@@ -229,5 +474,13 @@ export class LibraryServer {
     }
 
     return result;
+  }
+
+  protected _extractUuid(obj: { uuid?: string} ): string {
+    try {
+      return Database.validateId(obj.uuid);
+    } catch (err) {
+      throw new restifyErrors.BadRequestError('Invalid group uuid');
+    }
   }
 }
