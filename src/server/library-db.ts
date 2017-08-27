@@ -73,6 +73,12 @@ export interface UpdateResource extends Resource {
   uuid: string;
 }
 
+export interface FullResourceData extends Resource {
+  relatedPersons: RelatedPerson[];
+  relatedGroups: RelatedGroup[];
+  relatedObjects: ResolvedRelatedObject[];
+}
+
 /**
  * Any person that should be mentioned in library (author, translator or editor) is represented by such objects.
  */
@@ -234,7 +240,8 @@ export interface UpdateGroupType extends GroupType {
 }
 
 export enum ObjectRole {
-  Format = 1
+  Format = 1,
+  Cover
 }
 
 const ROLE_NAMES = [ 'format' ];
@@ -273,6 +280,10 @@ export interface RelatedObject {
   uuid?: string|null;
   role?: ObjectRole;
   tag?: string;
+}
+
+export interface ResolvedRelatedObject extends RelatedObject {
+  location: string;
 }
 
 /**
