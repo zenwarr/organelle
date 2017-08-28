@@ -50,11 +50,11 @@ export class Database {
     }
   }
 
-  /**
-   * Sqlite database object
-   * @returns {sqlite.Database}
-   */
-  get db(): sqlite.Database { return this._db; }
+  async close(): Promise<void> {
+    if (this._db != null) {
+      return this._db.close();
+    }
+  }
 
   static getId(something: string|{ uuid?: string|null }): string {
     if (typeof something === 'string') {
@@ -87,6 +87,12 @@ export class Database {
   protected async _tuneConnection() {
     await this.db.run('PRAGMA foreign_keys = TRUE');
   }
+
+  /**
+   * Sqlite database object
+   * @returns {sqlite.Database}
+   */
+  protected get db(): sqlite.Database { return this._db; }
 }
 
 export class DatabaseWithOptions extends Database {
