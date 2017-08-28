@@ -15,7 +15,7 @@ export interface DetailsProps {
 export class Details extends React.Component<DetailsProps> {
   render(): JSX.Element {
     let coverObject = this.props.relatedObjects.find(obj => obj.role === ObjectRole.Cover);
-    let coverUrl: string = coverObject ? coverObject.location : '';
+    let coverUrl: string = coverObject && coverObject.location ? coverObject.location : '';
 
     let authors = this.props.relatedPersons
             .filter(p => p.relation === PersonRelation.Author)

@@ -17,12 +17,7 @@ export const DEF_IMPORT_OPTIONS: ImportOptions = {
 };
 
 export abstract class AbstractStorage {
-  abstract get db(): StorageDatabase;
-
-  get uuid(): string|null {
-    return this.db.uuid;
-  }
-
+  abstract get uuid(): string|null;
   abstract objectLocations(uuid: string|UpdateRelatedObject): IterableIterator<Promise<string>>;
 }
 
@@ -40,12 +35,12 @@ export class FileSystemStorage extends AbstractStorage {
     });
   }
 
-  get root(): string {
-    return this._root;
+  get uuid(): string|null {
+    return this._db.uuid;
   }
 
-  get db(): StorageDatabase {
-    return this._db;
+  get root(): string {
+    return this._root;
   }
 
   get defaultFileTemplate(): string {
@@ -127,5 +122,9 @@ export class FileSystemStorage extends AbstractStorage {
     super();
     this._root = root;
     this._db = db;
+  }
+
+  get db(): StorageDatabase {
+    return this._db;
   }
 }

@@ -85,7 +85,7 @@ export interface ExistingResource extends Resource {
   desc: string;
 }
 
-export interface FullResourceData extends Resource {
+export interface FullResourceData extends ExistingResource {
   relatedPersons: RelatedPerson[];
   relatedGroups: RelatedGroup[];
   relatedObjects: ResolvedRelatedObject[];
@@ -337,7 +337,7 @@ export interface NewRelatedObject extends RelatedObject {
 }
 
 export interface ResolvedRelatedObject extends ExistingRelatedObject {
-  location: string;
+  location: string|null;
 }
 
 /**

@@ -5,11 +5,11 @@ import {Database} from "./db";
 import {
   Criterion, CriterionAnd, CriterionEqual, CriterionHasRelationWith, CriterionOr, ExistingGroup, ExistingPerson,
   ExistingRelatedObject,
-  ExistingResource,
+  ExistingResource, FullResourceData,
   GroupType, ListOptions, ObjectRole, objectRoleFromString, objectRoleToString, PersonRelation,
   personRelationFromString,
   personRelationToString,
-  RelatedGroup, RelatedPerson,
+  RelatedGroup, RelatedPerson, ResolvedRelatedObject,
   SortMode
 } from "./library-db";
 import {strictParseInt} from "../common/helpers";
@@ -136,7 +136,7 @@ export class LibraryServer {
     // list related objects with specific tag
     this._server.get('/objects/tags/:tags/', wrap(this._handleObjects));
 
-    // this._server.get('/object/:uuid/', wrap(this._handleObject));
+    this._server.get('/locations/:uuid/', wrap(this._handleObjectLocations));
   }
 
   protected _resourceToResponse(resource: ExistingResource): any {
@@ -152,6 +152,14 @@ export class LibraryServer {
       publisher: resource.publisher,
       desc: resource.desc,
     };
+  }
+
+  protected _fullResourceToResponse(resource: FullResourceData): any {
+    let res = (this._resourceToResponse(resource) as FullResourceData);
+    res.relatedPersons = resource.relatedPersons.map(x => this._relatedPersonToResponse(x));
+    res.relatedGroups = resource.relatedGroups.map(x => this._relatedGroupToResponse(x));
+    res.relatedObjects = resource.relatedObjects.map(x => this._resolvedObjectToResponse(x));
+    return res;
   }
 
   protected _personToResponse(person: ExistingPerson): any {
@@ -203,6 +211,16 @@ export class LibraryServer {
     };
   }
 
+  protected _resolvedObjectToResponse(object: ResolvedRelatedObject): any {
+    return {
+      uuid: object.uuid,
+      type: 'related_object',
+      role: objectRoleToString(object.role as ObjectRole),
+      tag: object.tag,
+      location: object.location
+    };
+  }
+
   protected _objectTagToResponse(tag: string): any {
     return {
       type: 'object_tag',
@@ -218,12 +236,12 @@ export class LibraryServer {
   protected async _handleResource(params: { uuid?: string }): Promise<any> {
     let uuid: string = this._extractUuid(params);
 
-    let resource = await this._lib.libraryDatabase.getResource(uuid);
+    let resource = await this._lib.getFullResourceData(uuid);
     if (resource == null) {
       throw new restifyErrors.ResourceNotFoundError('Resource does not exist');
     }
 
-    return this._resourceToResponse(resource);
+    return this._fullResourceToResponse(resource);
   }
 
   protected async _handleRelatedPersons(params: { uuid?: string, relations?: string }, query: any): Promise<any> {
@@ -375,6 +393,19 @@ export class LibraryServer {
 
     let options = this._listOptionsFromQuery(query);
     return (await this._lib.libraryDatabase.findObjectsByCriteria(crit, options)).map(x => this._relatedObjectToReponse(x));
+  }
+
+  protected async _handleObjectLocations(params: { uuid?: string }): Promise<any> {
+    let uuid = this._extractUuid(params);
+
+    let result: { type: string, location: string }[] = [];
+    for (let loc of this._lib.objectLocations(uuid)) {
+      result.push({
+        type: 'object_location',
+        location: await loc
+      });
+    }
+    return result;
   }
 
   protected async _handleObjectsTags(params: any, query: any): Promise<any> {

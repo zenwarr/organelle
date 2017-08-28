@@ -1,10 +1,10 @@
-import {FullResourceData, LibraryDatabase, UpdateRelatedObject} from "./library-db";
+import {FullResourceData, LibraryDatabase, ResolvedRelatedObject, UpdateRelatedObject} from "./library-db";
 import {AbstractStorage} from "./storage";
 import {Database} from "./db";
 
 export class Library {
-  constructor(protected _lib: LibraryDatabase) {
-
+  constructor(lib: LibraryDatabase) {
+    this._lib = lib;
   }
 
   get libraryDatabase(): LibraryDatabase {
@@ -60,13 +60,18 @@ export class Library {
     let rd = resource as FullResourceData;
     rd.relatedGroups = await this._lib.relatedGroups(resource);
     rd.relatedPersons = await this._lib.relatedPersons(resource);
-    rd.relatedObjects = [];
 
+    rd.relatedObjects = [];
     let relatedObjects = await this._lib.relatedObjects(resource);
     for (let relatedObject of relatedObjects) {
+      let locationCount = 0;
       for (let locationPromise of this.objectLocations(relatedObject)) {
         let location = await locationPromise;
         rd.relatedObjects.push({ ...relatedObject, location: location });
+        ++locationCount;
+      }
+      if (!locationCount) {
+        rd.relatedObjects.push({ ...relatedObject, location: null });
       }
     }
 
@@ -75,6 +80,7 @@ export class Library {
 
   /** Protected area **/
 
-  protected _root: string;
-  protected _storages: AbstractStorage[];
+  protected _lib: LibraryDatabase;
+  protected _root: string|null = null;
+  protected _storages: AbstractStorage[] = [];
 }

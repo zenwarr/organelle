@@ -7,6 +7,7 @@ import * as sinon from "sinon";
 import {LibraryServer} from "../../server/library-server";
 import {Library} from "../../server/library";
 import * as supertest from 'supertest';
+import {OBJ1, StorageMock} from "./storage-mock";
 
 should();
 chai.use(chaiAsPromised);
@@ -112,7 +113,16 @@ describe("LibraryServer", function () {
             lastModifyDate: fakeDate.toUTCString(),
             publisher: 'Viking Press',
             publishDate: '1980',
-            desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters."
+            desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters.",
+            relatedObjects: [],
+            relatedPersons: [{
+              name: 'Stephen King',
+              nameSort: 'King, Stephen',
+              type: 'related_person',
+              relation: 'author',
+              uuid: testlib.KING
+            }],
+            relatedGroups: []
           });
         })
         .end(done);
@@ -282,6 +292,56 @@ describe("LibraryServer", function () {
           })
           .end(done);
     });
+
+    it("should list objects inside full resource props", function (done) {
+      supertest(server.server)
+          .get(`/resource/${testlib.MIST}`)
+          // .expect(200)
+          .expect((resp: any) => {
+            expect(resp.body).to.be.deep.equal({
+              uuid: testlib.MIST,
+              type: 'resource',
+              title: 'The Mist',
+              titleSort: 'Mist, The',
+              rating: 400,
+              addDate: fakeDate.toUTCString(),
+              lastModifyDate: fakeDate.toUTCString(),
+              publisher: 'Viking Press',
+              publishDate: '1980',
+              desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters.",
+              relatedObjects: [{
+                location: null,
+                role: "format",
+                tag: "djvu",
+                type: "related_object",
+                uuid: "2uuid"
+              },
+              {
+                location: null,
+                role: "format",
+                tag: "pdf",
+                type: "related_object",
+                uuid: "1uuid"
+              },
+              {
+                location: null,
+                role: "format",
+                tag: "pdf",
+                type: "related_object",
+                uuid: "3uuid"
+              }],
+              relatedPersons: [{
+                name: 'Stephen King',
+                nameSort: 'King, Stephen',
+                type: 'related_person',
+                relation: 'author',
+                uuid: testlib.KING
+              }],
+              relatedGroups: []
+            });
+          })
+          .end(done);
+    });
   });
 
   it("should list groups", function (done) {
@@ -416,6 +476,21 @@ describe("LibraryServer", function () {
         .expect(200)
         .expect((resp: any) => {
           expect(resp.body.map((x: any) => x.uuid)).to.be.deep.equal([testlib.MIST]);
+        })
+        .end(done);
+  });
+
+  it("should show resolved objects", function (done) {
+    lib.addStorage(new StorageMock());
+
+    supertest(server.server)
+        .get(`/locations/${OBJ1}`)
+        .expect(200)
+        .expect((resp: any) => {
+          expect(resp.body).to.be.deep.equal([
+            { type: 'object_location', location: 'organelle://loc1' },
+            { type: 'object_location', location: 'organelle://loc2' }
+          ]);
         })
         .end(done);
   });
