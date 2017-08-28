@@ -1,5 +1,5 @@
 import uuid = require("uuid");
-import {GroupType, KnownGroupTypes, LibraryDatabase, PersonRelation} from "../../server/library-db";
+import {KnownGroupTypes, LibraryDatabase, PersonRelation} from "../../server/library-db";
 
 export const MIST = uuid.v4(),
     TOLL = uuid.v4(),
@@ -143,49 +143,49 @@ export async function createTestLib(): Promise<LibraryDatabase> {
 
   await db.addGroup({
     uuid: TAG1,
-    groupType: db.getGroupType(KnownGroupTypes.Tag) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Tag),
     title: 'tag 1',
     titleSort: 'tag 1'
   });
 
   await db.addGroup({
     uuid: TAG2,
-    groupType: db.getGroupType(KnownGroupTypes.Tag) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Tag),
     title: 'tag 2',
     titleSort: 'tag 2'
   });
 
   await db.addGroup({
     uuid: LANG_ENGLISH,
-    groupType: db.getGroupType(KnownGroupTypes.Language) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Language),
     title: 'english',
     titleSort: 'english'
   });
 
   await db.addGroup({
     uuid: LANG_RUSSIAN,
-    groupType: db.getGroupType(KnownGroupTypes.Language) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Language),
     title: 'russian',
     titleSort: 'russian'
   });
 
   await db.addGroup({
     uuid: CATEGORY1,
-    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Category),
     title: 'group 1',
     titleSort: 'group 1'
   });
 
   await db.addGroup({
     uuid: CATEGORY2,
-    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Category),
     title: 'group 2',
     titleSort: 'group 2'
   });
 
   await db.addGroup({
     uuid: SERIES1,
-    groupType: db.getGroupType(KnownGroupTypes.Series) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Series),
     title: 'The Cool Series',
     titleSort: 'Cool Series, The'
   });

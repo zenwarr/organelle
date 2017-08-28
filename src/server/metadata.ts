@@ -1,12 +1,13 @@
 import {
-  KnownGroupTypes, LibraryDatabase, Person, PersonRelation, RelatedGroup, RelatedPerson,
+  ExistingResource,
+  KnownGroupTypes, LibraryDatabase, NewRelatedPerson, Person, PersonRelation, RelatedGroup, RelatedPerson,
   Resource
 } from "./library-db";
 import {VarResolver} from "./formatter";
 
 export interface ExtractedMetadata {
   title?: string;
-  persons?: RelatedPerson[];
+  persons?: NewRelatedPerson[];
   genres?: string[];
   desc?: string;
   tags?: string[];
@@ -80,8 +81,9 @@ function formatPerson(person: Person, specifier: string|null): string {
 }
 
 export async function createResourceVarResolver(lib: LibraryDatabase,
-                                         res: Resource|string): Promise<VarResolver> {
-  let resource: Resource;
+                                         res: ExistingResource|string): Promise<VarResolver> {
+  let resource: ExistingResource;
+
   if (typeof res === 'string') {
     let fResource = await lib.getResource(res);
     if (!fResource) {

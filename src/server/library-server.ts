@@ -3,13 +3,14 @@ import * as restify from 'restify';
 import * as restifyErrors from 'restify-errors';
 import {Database} from "./db";
 import {
-  Criterion, CriterionAnd, CriterionEqual, CriterionHasRelationWith, CriterionOr,
-  Group, GroupType, ListOptions, ObjectRole, objectRoleFromString, objectRoleToString, Person, PersonRelation,
+  Criterion, CriterionAnd, CriterionEqual, CriterionHasRelationWith, CriterionOr, ExistingGroup, ExistingPerson,
+  ExistingRelatedObject,
+  ExistingResource,
+  GroupType, ListOptions, ObjectRole, objectRoleFromString, objectRoleToString, PersonRelation,
   personRelationFromString,
   personRelationToString,
-  RelatedGroup, RelatedObject,
-  RelatedPerson,
-  Resource, SortMode
+  RelatedGroup, RelatedPerson,
+  SortMode
 } from "./library-db";
 import {strictParseInt} from "../common/helpers";
 
@@ -138,7 +139,7 @@ export class LibraryServer {
     // this._server.get('/object/:uuid/', wrap(this._handleObject));
   }
 
-  protected _resourceToResponse(resource: Resource): any {
+  protected _resourceToResponse(resource: ExistingResource): any {
     return {
       uuid: resource.uuid,
       type: 'resource',
@@ -153,7 +154,7 @@ export class LibraryServer {
     };
   }
 
-  protected _personToResponse(person: Person): any {
+  protected _personToResponse(person: ExistingPerson): any {
     return {
       uuid: person.uuid,
       type: 'person',
@@ -162,7 +163,7 @@ export class LibraryServer {
     };
   }
 
-  protected _groupToResponse(group: Group): any {
+  protected _groupToResponse(group: ExistingGroup): any {
     return {
       uuid: group.uuid,
       type: 'group',
@@ -193,7 +194,7 @@ export class LibraryServer {
     };
   }
 
-  protected _relatedObjectToReponse(object: RelatedObject): any {
+  protected _relatedObjectToReponse(object: ExistingRelatedObject): any {
     return {
       uuid: object.uuid,
       type: 'related_object',

@@ -1,4 +1,4 @@
-import {LibraryDatabase, RelatedObject} from "./library-db";
+import {FullResourceData, LibraryDatabase, UpdateRelatedObject} from "./library-db";
 import {AbstractStorage} from "./storage";
 import {Database} from "./db";
 
@@ -32,7 +32,7 @@ export class Library {
     this._storages.filter(stor => stor.uuid === uuid);
   }
 
-  *objectLocations(obj: string|RelatedObject): IterableIterator<Promise<string>> {
+  *objectLocations(obj: string|UpdateRelatedObject): IterableIterator<Promise<string>> {
     obj = Database.getId(obj);
     for (let storage of this._storages) {
       let locations = storage.objectLocations(obj);
@@ -42,13 +42,35 @@ export class Library {
     }
   }
 
-  async firstObjectLocation(obj: string|RelatedObject): Promise<string> {
+  async firstObjectLocation(obj: string|UpdateRelatedObject): Promise<string> {
     let location = this.objectLocations(obj).next();
     if (location == null) {
       throw new Error();
     } else {
       return location.value;
     }
+  }
+
+  async getFullResourceData(uuid: string): Promise<FullResourceData|null> {
+    let resource = await this._lib.getResource(uuid);
+    if (!resource) {
+      return null;
+    }
+
+    let rd = resource as FullResourceData;
+    rd.relatedGroups = await this._lib.relatedGroups(resource);
+    rd.relatedPersons = await this._lib.relatedPersons(resource);
+    rd.relatedObjects = [];
+
+    let relatedObjects = await this._lib.relatedObjects(resource);
+    for (let relatedObject of relatedObjects) {
+      for (let locationPromise of this.objectLocations(relatedObject)) {
+        let location = await locationPromise;
+        rd.relatedObjects.push({ ...relatedObject, location: location });
+      }
+    }
+
+    return rd;
   }
 
   /** Protected area **/

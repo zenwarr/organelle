@@ -3,7 +3,7 @@ import {isValidTemplate, TemplateProcessor} from "./formatter";
 import * as path from "path";
 import * as fs from 'fs-extra';
 import {Database} from "./db";
-import {RelatedObject} from "./library-db";
+import {UpdateRelatedObject} from "./library-db";
 
 const DEF_FILE_TEMPLATE = '{author} - {title}';
 const DEF_DB_FILENAME = 'storage.db';
@@ -23,11 +23,11 @@ export abstract class AbstractStorage {
     return this.db.uuid;
   }
 
-  abstract objectLocations(uuid: string|RelatedObject): IterableIterator<Promise<string>>;
+  abstract objectLocations(uuid: string|UpdateRelatedObject): IterableIterator<Promise<string>>;
 }
 
 export class FileSystemStorage extends AbstractStorage {
-  *objectLocations(uuid: string|RelatedObject): IterableIterator<Promise<string>> {
+  *objectLocations(uuid: string|UpdateRelatedObject): IterableIterator<Promise<string>> {
     yield new Promise<string>((resolve, reject) => {
       this.db.getObject(Database.getId(uuid)).then(storageObject => {
         if (storageObject && storageObject.location) {

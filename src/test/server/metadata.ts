@@ -1,7 +1,7 @@
 import {should, expect} from 'chai';
 import * as chai from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
-import {LibraryDatabase, Resource, PersonRelation} from "../../server/library-db";
+import {LibraryDatabase, PersonRelation, ExistingResource} from "../../server/library-db";
 import {TemplateProcessor} from "../../server/formatter";
 import {createResourceVarResolver} from "../../server/metadata";
 import * as testlib from './testlib';
@@ -18,7 +18,7 @@ describe('metadata', function() {
       lib = await testlib.createTestLib();
 
       proc = new TemplateProcessor(await createResourceVarResolver(lib,
-          await lib.getResource(testlib.MIST) as Resource));
+          await lib.getResource(testlib.MIST) as ExistingResource));
     });
 
     it("should resolve title", async function () {

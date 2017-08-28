@@ -1,12 +1,12 @@
 import * as React from "react";
 import {
-  GroupType,
+  ExistingRelatedObject, ExistingResource,
   KnownGroupTypes,
   ObjectRole, PersonRelation, RelatedGroup, RelatedPerson, ResolvedRelatedObject, Resource
 } from "../../server/library-db";
 
 export interface DetailsProps {
-  resource: Resource;
+  resource: ExistingResource;
   relatedPersons: RelatedPerson[];
   relatedGroups: RelatedGroup[];
   relatedObjects: ResolvedRelatedObject[];
@@ -23,7 +23,7 @@ export class Details extends React.Component<DetailsProps> {
             .join(' & ');
 
     let tags = this.props.relatedGroups
-            .filter(g => (g.groupType as GroupType).uuid === KnownGroupTypes.Tag)
+            .filter(g => g.groupType.uuid === KnownGroupTypes.Tag)
             .map(g => g.title)
             .join(', ');
 

@@ -3,7 +3,7 @@ import * as libxml from 'libxmljs';
 import * as fs from "fs";
 import * as tmp from 'tmp';
 import {promisify} from "util";
-import {PersonRelation, RelatedPerson} from "./library-db";
+import {NewRelatedPerson, PersonRelation} from "./library-db";
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
@@ -25,13 +25,14 @@ function getPersonName(elem: libxml.Element) {
   return [last, [first, middle].join(' ').trim()].join(', ').trim();
 }
 
-function* personsList(elems: libxml.Node[], relation: PersonRelation): IterableIterator<RelatedPerson> {
+function* personsList(elems: libxml.Node[], relation: PersonRelation): IterableIterator<NewRelatedPerson> {
   for (let j = 0; j < elems.length; ++j) {
     let authorElem = elems[j] as libxml.Element;
     let author = getPersonName(authorElem);
     if (author) {
       yield {
         name: author,
+        nameSort: author,
         relation: relation
       };
     }

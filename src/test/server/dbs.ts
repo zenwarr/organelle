@@ -7,8 +7,7 @@ import {DatabaseWithOptions} from "../../server/db";
 import {
   CriterionEqual,
   CriterionOr,
-  GroupType, KnownGroupTypes, LibraryDatabase, ObjectRole, PersonRelation, RelatedObject,
-  Resource, SortMode
+  KnownGroupTypes, LibraryDatabase, ObjectRole, PersonRelation, Resource, SortMode
 } from "../../server/library-db";
 import uuid = require("uuid");
 import {dateToTimestamp} from "../../server/common";
@@ -505,10 +504,10 @@ describe('dbs', function() {
 
       it("should remove group relations", async function () {
         await db.addGroupRelation(MIST, LANG_ENGLISH);
-        expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(1);
+        expect(await db.relatedGroups(MIST, db.getKnownGroupType(KnownGroupTypes.Language))).to.have.lengthOf(1);
 
         await db.removeGroupRelations(MIST, LANG_ENGLISH);
-        expect(await db.relatedGroups(MIST, db.getGroupType(KnownGroupTypes.Language) as GroupType)).to.have.lengthOf(0);
+        expect(await db.relatedGroups(MIST, db.getKnownGroupType(KnownGroupTypes.Language))).to.have.lengthOf(0);
       });
 
       it("should remove relations of specific group type", async function () {
@@ -520,7 +519,7 @@ describe('dbs', function() {
 
         expect(await db.relatedGroups(MIST)).to.have.lengthOf(5);
 
-        await db.removeGroupRelations(MIST, undefined, db.getGroupType(KnownGroupTypes.Language) as GroupType);
+        await db.removeGroupRelations(MIST, undefined, db.getKnownGroupType(KnownGroupTypes.Language));
 
         expect(await db.relatedGroups(MIST)).to.have.lengthOf(3);
       });
@@ -720,7 +719,7 @@ describe('dbs', function() {
       });
 
       it("should create object relations", async function () {
-        let obj: RelatedObject = {
+        let obj = {
           uuid: TEST_UUID,
           role: ObjectRole.Format,
           tag: 'pdf'
@@ -1264,49 +1263,49 @@ async function fillTestData(db: LibraryDatabase) {
 
   await db.addGroup({
     uuid: TAG1,
-    groupType: db.getGroupType(KnownGroupTypes.Tag) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Tag),
     title: 'tag 1',
     titleSort: 'tag 1'
   });
 
   await db.addGroup({
     uuid: TAG2,
-    groupType: db.getGroupType(KnownGroupTypes.Tag) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Tag),
     title: 'tag 2',
     titleSort: 'tag 2'
   });
 
   await db.addGroup({
     uuid: LANG_ENGLISH,
-    groupType: db.getGroupType(KnownGroupTypes.Language) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Language),
     title: 'english',
     titleSort: 'english'
   });
 
   await db.addGroup({
     uuid: LANG_RUSSIAN,
-    groupType: db.getGroupType(KnownGroupTypes.Language) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Language),
     title: 'russian',
     titleSort: 'russian'
   });
 
   await db.addGroup({
     uuid: CATEGORY1,
-    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Category),
     title: 'group 1',
     titleSort: 'group 1'
   });
 
   await db.addGroup({
     uuid: CATEGORY2,
-    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Category),
     title: 'group 2',
     titleSort: 'group 2'
   });
 
   await db.addGroup({
     uuid: SORTING_TITLE,
-    groupType: db.getGroupType(KnownGroupTypes.Category) as GroupType,
+    groupType: db.getKnownGroupType(KnownGroupTypes.Category),
     title: 'The Title',
     titleSort: 'Title, The'
   });

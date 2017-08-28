@@ -7,9 +7,6 @@ import * as sinon from "sinon";
 import {LibraryServer} from "../../server/library-server";
 import {Library} from "../../server/library";
 import * as supertest from 'supertest';
-import WritableStream = NodeJS.WritableStream;
-import uuid = require("uuid");
-import {SuperTest} from "supertest";
 
 should();
 chai.use(chaiAsPromised);
