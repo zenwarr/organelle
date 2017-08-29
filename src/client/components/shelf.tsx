@@ -1,23 +1,22 @@
 import * as React from "react";
-import {activateResource, FullResourceDataRecord, StoreRecord} from "../store/store";
-import * as Immutable from 'immutable';
+import {loadResource, Store} from "../store/store";
 import {connect} from "react-redux";
+import {FullResourceData} from "../../common/db";
 
 interface ShelfProps {
-  shelfResults: Immutable.List<FullResourceDataRecord>;
-  setActiveResource: (res: FullResourceDataRecord) => void;
+  shelfResults: FullResourceData[];
+  setActiveResource: (res: FullResourceData) => void;
 }
 
 class Shelf extends React.Component<ShelfProps> {
   selectRow(index: number): void {
-    console.log(this.props.shelfResults);
-    this.props.setActiveResource(this.props.shelfResults.get(index));
+    this.props.setActiveResource(this.props.shelfResults[index]);
   }
 
   render(): JSX.Element {
     return <table>
       <tbody>
-        {this.props.shelfResults.map((res: FullResourceDataRecord, index) => {
+        {this.props.shelfResults.map((res: FullResourceData, index) => {
           return <tr key={index} onClick={this.selectRow.bind(this, index)}>
             <td>{res.title}</td>
           </tr>
@@ -27,14 +26,14 @@ class Shelf extends React.Component<ShelfProps> {
   }
 }
 
-export const CShelf = connect((state: StoreRecord) => {
+export const CShelf = connect((state: Store) => {
   return {
     shelfResults: state.shelfResults
   };
 }, (dispatch) => {
   return {
-    setActiveResource: (res: FullResourceDataRecord) => {
-      dispatch(activateResource(res));
+    setActiveResource: (res: FullResourceData) => {
+      dispatch(loadResource(res.uuid));
     }
   }
 })(Shelf);

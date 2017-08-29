@@ -1,4 +1,4 @@
-import {StoreRecord} from "../store/store";
+import {Store} from "../store/store";
 import {connect} from "react-redux";
 import * as React from 'react';
 
@@ -13,9 +13,9 @@ export const StatusBar = (props: StatusBarProps): JSX.Element => {
   </div>
 };
 
-export const CStatusBar = connect(((state: StoreRecord) => {
+export const CStatusBar = connect((state: Store) => {
   return {
     message: state.message,
     operationPending: state.operationPending
   };
-}))(StatusBar);
+})(StatusBar);

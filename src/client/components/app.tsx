@@ -2,7 +2,7 @@ import * as React from "react";
 import {CConnectionStatus} from "./connection-status";
 import {CShelf} from "./shelf";
 import {CStatusBar} from "./status";
-import {getShelfResults, StoreRecord} from "../store/store";
+import {getShelfResults, Store} from "../store/store";
 import {connect} from "react-redux";
 import {CDetails} from "./details";
 
@@ -28,7 +28,7 @@ export class App extends React.Component<AppProps> {
   }
 }
 
-export const CApp = connect((state: StoreRecord) => {
+export const CApp = connect((state: Store) => {
   return { };
 }, (dispatch) => {
   return {
