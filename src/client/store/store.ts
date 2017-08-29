@@ -34,6 +34,8 @@ function apiCallReducer(key: string, adapter: null, defValue: any, prev: Store, 
   if (!asyncAction.pending && !asyncAction.error) {
     return iassign(prev, prev => {
       (prev as any)[key] = asyncAction.result;
+      prev.operationPending = false;
+      prev.message = '';
       return prev;
     });
   } else {
@@ -78,7 +80,8 @@ function reducer(prev: Store, action: redux.Action): Store {
 let appStore: redux.Store<Store>;
 
 export function getStore(): redux.Store<Store> {
-  return appStore ? appStore : (appStore = redux.createStore(reducer));
+  return appStore ? appStore : (appStore = redux.createStore(reducer,
+      (window as any)['__REDUX_DEVTOOLS_EXTENSION__'] && (window as any)['__REDUX_DEVTOOLS_EXTENSION__']()));
 }
 
 export function apiUrl(path: string): string {
