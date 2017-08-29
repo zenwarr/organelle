@@ -1,6 +1,7 @@
-import {FullResourceData, LibraryDatabase, ResolvedRelatedObject, UpdateRelatedObject} from "./library-db";
 import {AbstractStorage} from "./storage";
 import {Database} from "./db";
+import {LibraryDatabase} from "./library-db";
+import {FullResourceData, UpdateRelatedObject} from "../common/db";
 
 export class Library {
   constructor(lib: LibraryDatabase) {

@@ -4,14 +4,11 @@ import * as tmp from 'tmp';
 import * as chai from 'chai';
 import * as chaiAsPromised from "chai-as-promised";
 import {DatabaseWithOptions} from "../../server/db";
-import {
-  CriterionEqual,
-  CriterionOr,
-  KnownGroupTypes, LibraryDatabase, ObjectRole, PersonRelation, Resource, SortMode
-} from "../../server/library-db";
+import {CriterionEqual, CriterionOr, LibraryDatabase, SortMode} from "../../server/library-db";
 import uuid = require("uuid");
 import {dateToTimestamp} from "../../server/common";
 import * as sinon from 'sinon';
+import {KnownGroupTypes, ObjectRole, PersonRelation, Resource} from "../../common/db";
 
 should();
 chai.use(chaiAsPromised);

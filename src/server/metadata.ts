@@ -1,9 +1,9 @@
-import {
-  ExistingResource,
-  KnownGroupTypes, LibraryDatabase, NewRelatedPerson, Person, PersonRelation, RelatedGroup, RelatedPerson,
-  Resource
-} from "./library-db";
 import {VarResolver} from "./formatter";
+import {
+  ExistingResource, KnownGroupTypes, NewRelatedPerson, Person, PersonRelation, RelatedGroup, RelatedPerson,
+  Resource
+} from "../common/db";
+import {LibraryDatabase} from "./library-db";
 
 export interface ExtractedMetadata {
   title?: string;

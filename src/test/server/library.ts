@@ -1,7 +1,4 @@
 import {should, expect} from 'chai';
-import * as chai from 'chai';
-import {AbstractStorage} from "../../server/storage";
-import {UpdateRelatedObject} from "../../server/library-db";
 import {Library} from "../../server/library";
 import {createTestLib} from "./testlib";
 import {OBJ1, OBJ3, StorageMock} from "./storage-mock";

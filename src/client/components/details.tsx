@@ -1,28 +1,29 @@
 import * as React from "react";
-import {
-  ExistingRelatedObject, ExistingResource,
-  KnownGroupTypes,
-  ObjectRole, PersonRelation, RelatedGroup, RelatedPerson, ResolvedRelatedObject, Resource
-} from "../../server/library-db";
+import {FullResourceDataRecord, StoreRecord} from "../store/store";
+import {connect} from "react-redux";
+import {KnownGroupTypes, ObjectRole, PersonRelation} from "../../common/db";
 
-export interface DetailsProps {
-  resource: ExistingResource;
-  relatedPersons: RelatedPerson[];
-  relatedGroups: RelatedGroup[];
-  relatedObjects: ResolvedRelatedObject[];
+interface DetailsProps {
+  activeResource: FullResourceDataRecord;
 }
 
-export class Details extends React.Component<DetailsProps> {
+class Details extends React.Component<DetailsProps> {
   render(): JSX.Element {
-    let coverObject = this.props.relatedObjects.find(obj => obj.role === ObjectRole.Cover);
+    if (!this.props.activeResource) {
+      return <div>
+        No resource selected
+      </div>;
+    }
+
+    let coverObject = this.props.activeResource.relatedObjects.find(obj => obj.role === ObjectRole.Cover);
     let coverUrl: string = coverObject && coverObject.location ? coverObject.location : '';
 
-    let authors = this.props.relatedPersons
+    let authors = this.props.activeResource.relatedPersons
             .filter(p => p.relation === PersonRelation.Author)
             .map(p => p.name)
             .join(' & ');
 
-    let tags = this.props.relatedGroups
+    let tags = this.props.activeResource.relatedGroups
             .filter(g => g.groupType.uuid === KnownGroupTypes.Tag)
             .map(g => g.title)
             .join(', ');
@@ -32,11 +33,17 @@ export class Details extends React.Component<DetailsProps> {
         <img src={coverUrl} alt="Cover image" />
       </div>
 
-      <p>{this.props.resource.title}</p>
+      <p>{this.props.activeResource.title}</p>
       <p>Authors: {authors}</p>
       <p>Tags: {tags}</p>
 
-      <p>{this.props.resource.desc}</p>
+      <p>{this.props.activeResource.desc}</p>
     </div>;
   }
 }
+
+export const CDetails = connect((state: StoreRecord) => {
+  return {
+    activeResource: state.activeResource
+  };
+})(Details);

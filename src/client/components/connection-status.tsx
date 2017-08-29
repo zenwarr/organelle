@@ -1,8 +1,8 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {Connection} from "../store/store";
+import {ConnectionRecord} from "../store/store";
 
-const ConnectionStatus = (props: { conn: Connection }): JSX.Element|null => {
+const ConnectionStatus = (props: { conn: ConnectionRecord }): JSX.Element|null => {
   if (props.conn) {
     return null;
   } else {
@@ -12,10 +12,8 @@ const ConnectionStatus = (props: { conn: Connection }): JSX.Element|null => {
   }
 };
 
-export const ConnectionStatusConnected = connect((state => {
+export const CConnectionStatus = connect((state => {
   return {
     conn: state.conn
-  }
+  };
 }))(ConnectionStatus);
-
-

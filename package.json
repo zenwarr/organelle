@@ -12,6 +12,7 @@
     "@types/restify": "^5.0.1",
     "@types/restify-errors": "^4.3.2",
     "@types/sqlite3": "^3.1.0",
+    "@types/superagent": "^3.5.5",
     "@types/tmp": "0.0.33",
     "@types/uuid": "^3.4.0",
     "fs-extra": "^4.0.1",
@@ -27,6 +28,7 @@
     "restify-errors": "^5.0.0",
     "sqlite": "^2.8.0",
     "sqlite3": "^3.1.9",
+    "superagent": "^3.6.0",
     "tmp": "0.0.31",
     "typed-immutable-record": "0.0.6",
     "uuid": "^3.1.0"

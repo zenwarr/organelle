@@ -1,5 +1,5 @@
 import {AbstractStorage} from "../../server/storage";
-import {UpdateRelatedObject} from "../../server/library-db";
+import {UpdateRelatedObject} from "../../common/db";
 
 export const OBJ1 = '1uuid',
     OBJ2 = '2uuid',

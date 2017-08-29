@@ -3,7 +3,7 @@ import * as libxml from 'libxmljs';
 import * as fs from "fs";
 import * as tmp from 'tmp';
 import {promisify} from "util";
-import {NewRelatedPerson, PersonRelation} from "./library-db";
+import {NewRelatedPerson, PersonRelation} from "../common/db";
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);

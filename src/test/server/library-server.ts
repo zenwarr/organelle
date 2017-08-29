@@ -2,12 +2,13 @@ import { should, expect } from 'chai';
 import * as chai from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
 import * as testlib from './testlib';
-import {LibraryDatabase, ObjectRole, PersonRelation} from "../../server/library-db";
+import {LibraryDatabase} from "../../server/library-db";
 import * as sinon from "sinon";
 import {LibraryServer} from "../../server/library-server";
 import {Library} from "../../server/library";
 import * as supertest from 'supertest';
 import {OBJ1, StorageMock} from "./storage-mock";
+import {ObjectRole, PersonRelation} from "../../common/db";
 
 should();
 chai.use(chaiAsPromised);

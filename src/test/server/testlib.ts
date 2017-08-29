@@ -1,5 +1,6 @@
 import uuid = require("uuid");
-import {KnownGroupTypes, LibraryDatabase, PersonRelation} from "../../server/library-db";
+import {LibraryDatabase} from "../../server/library-db";
+import {KnownGroupTypes, PersonRelation} from "../../common/db";
 
 export const MIST = uuid.v4(),
     TOLL = uuid.v4(),

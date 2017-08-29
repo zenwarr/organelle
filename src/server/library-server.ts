@@ -2,17 +2,19 @@ import {Library} from "./library";
 import * as restify from 'restify';
 import * as restifyErrors from 'restify-errors';
 import {Database} from "./db";
-import {
-  Criterion, CriterionAnd, CriterionEqual, CriterionHasRelationWith, CriterionOr, ExistingGroup, ExistingPerson,
-  ExistingRelatedObject,
-  ExistingResource, FullResourceData,
-  GroupType, ListOptions, ObjectRole, objectRoleFromString, objectRoleToString, PersonRelation,
-  personRelationFromString,
-  personRelationToString,
-  RelatedGroup, RelatedPerson, ResolvedRelatedObject,
-  SortMode
-} from "./library-db";
 import {strictParseInt} from "../common/helpers";
+import {
+  ExistingPerson, ExistingResource, FullResourceData, ExistingGroup, RelatedPerson,
+  RelatedGroup,
+  ExistingRelatedObject,
+  ResolvedRelatedObject,
+  GroupType, objectRoleToString, ObjectRole, objectRoleFromString, personRelationFromString
+} from "../common/db";
+import {
+  Criterion, ListOptions, CriterionOr, CriterionEqual, CriterionAnd,
+  CriterionHasRelationWith, SortMode
+} from "./library-db";
+import {personRelationToString, PersonRelation} from "../common/db";
 
 export const DEF_SERVER_PORT = 8080;
 
@@ -20,6 +22,11 @@ export class LibraryServer {
   constructor(protected _lib: Library) {
     this._server = restify.createServer();
     this._server.use(restify.plugins.queryParser());
+    this._server.use((req, resp, next) => {
+      resp.header('Access-Control-Allow-Origin', '*');
+      resp.header('Access-Control-Allow-Headers', 'X-Requested-With');
+      return next();
+    });
     this._initRoutes();
   }
 

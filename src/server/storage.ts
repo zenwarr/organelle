@@ -3,7 +3,7 @@ import {isValidTemplate, TemplateProcessor} from "./formatter";
 import * as path from "path";
 import * as fs from 'fs-extra';
 import {Database} from "./db";
-import {UpdateRelatedObject} from "./library-db";
+import {UpdateRelatedObject} from "../common/db";
 
 const DEF_FILE_TEMPLATE = '{author} - {title}';
 const DEF_DB_FILENAME = 'storage.db';
