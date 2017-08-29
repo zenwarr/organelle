@@ -1,4 +1,4 @@
-import {Store} from "../store/store";
+import {Store} from "../../store/store";
 import {connect} from "react-redux";
 import * as React from 'react';
 

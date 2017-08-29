@@ -1,7 +1,7 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {KnownGroupTypes, ObjectRole, PersonRelation, FullResourceData} from "../../common/db";
-import {Store} from "../store/store";
+import {KnownGroupTypes, ObjectRole, PersonRelation, FullResourceData} from "../../../common/db";
+import {Store} from "../../store/store";
 
 interface DetailsProps {
   activeResource: FullResourceData;

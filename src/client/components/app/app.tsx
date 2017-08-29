@@ -1,10 +1,10 @@
 import * as React from "react";
-import {CConnectionStatus} from "./connection-status";
-import {CShelf} from "./shelf";
-import {CStatusBar} from "./status";
-import {getShelfResults, Store} from "../store/store";
 import {connect} from "react-redux";
-import {CDetails} from "./details";
+import {getShelfResults, Store} from "../../store/store";
+import {CConnectionStatus} from "../connection-status/connection-status";
+import {CShelf} from "../shelf/shelf";
+import {CStatusBar} from "../status/status";
+import {CDetails} from "../details/details";
 
 interface AppProps {
   connect(): void;

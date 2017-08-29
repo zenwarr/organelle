@@ -1,6 +1,6 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {Connection, Store} from "../store/store";
+import {Connection, Store} from "../../store/store";
 
 const ConnectionStatus = (props: { conn: Connection }): JSX.Element|null => {
   if (props.conn) {

@@ -1,7 +1,7 @@
 import * as React from "react";
-import {loadResource, Store} from "../store/store";
+import {loadResource, Store} from "../../store/store";
 import {connect} from "react-redux";
-import {FullResourceData} from "../../common/db";
+import {FullResourceData} from "../../../common/db";
 
 interface ShelfProps {
   shelfResults: FullResourceData[];
