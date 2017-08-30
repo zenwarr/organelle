@@ -1,54 +1,72 @@
 import * as redux from 'redux';
 import * as request from 'superagent';
 import {FullResourceData} from "../../common/db";
-import * as iassign from 'immutable-assign';;
+import * as iassign from 'immutable-assign';
 
 /** Top-level application store **/
 
-export interface Store {
+export interface AppState {
   conn: Connection;
   activeResource: FullResourceData|null;
-  shelfResults: FullResourceData[];
+  shelfResults: FullResourceData[]|null;
   message: string;
   operationPending: boolean;
 }
 
-const initialState: Store = {
+const initialState: AppState = {
   conn: {
-    host: 'http://localhost:8080'
+    host: 'http://localhost:8080',
+    isConnected: false
   },
   activeResource: null,
-  shelfResults: [],
+  shelfResults: null,
   message: '',
   operationPending: false
 };
 
 export interface Connection {
   host: string;
+  isConnected: boolean;
 }
 
 /** Redux shit **/
 
-function apiCallReducer(key: string, adapter: null, defValue: any, prev: Store, action: redux.Action): Store {
+function apiCallReducer(key: string, defValue: any, prev: AppState, action: redux.Action): AppState {
+  let keyPath = key.split('.');
+
+  function applyKeys(root: any, value: any, ...keys: string[]): void {
+    if (keys.length === 1) {
+      root[keys[0]] = value;
+    } else if (keys.length > 1) {
+      applyKeys(root[keys[0]], value, ...keys.slice(1));
+    } else {
+      throw new Error();
+    }
+  }
+
+  function apply(root: any, value: any): void {
+    applyKeys(root, value, ...keyPath);
+  }
+
   let asyncAction = action as IAsyncAction;
   if (!asyncAction.pending && !asyncAction.error) {
     return iassign(prev, prev => {
-      (prev as any)[key] = asyncAction.result;
+      apply(prev, asyncAction.result);
       prev.operationPending = false;
       prev.message = '';
       return prev;
     });
   } else {
     return iassign(prev, prev => {
+      apply(prev, defValue);
       prev.operationPending = asyncAction.pending;
       prev.message = asyncAction.error ? asyncAction.error : '';
-      (prev as any)[key] = defValue;
       return prev;
     });
   }
 }
 
-function reducer(prev: Store, action: redux.Action): Store {
+function reducer(prev: AppState, action: redux.Action): AppState {
   if (prev == null) {
     return initialState;
   } else {
@@ -60,16 +78,13 @@ function reducer(prev: Store, action: redux.Action): Store {
         });
 
       case AC_CONNECT:
-        return iassign(prev, prev => {
-          prev.operationPending = (action as IAsyncAction).pending;
-          return prev;
-        });
+        return apiCallReducer('conn.isConnected', false, prev, action);
 
       case AC_LOAD_SHELF:
-        return apiCallReducer('shelfResults', null, [], prev, action);
+        return apiCallReducer('shelfResults', [], prev, action);
 
       case AC_LOAD_RESOURCE:
-        return apiCallReducer('activeResource', null, null, prev, action);
+        return apiCallReducer('activeResource', null, prev, action);
 
       default:
         return prev;
@@ -77,9 +92,9 @@ function reducer(prev: Store, action: redux.Action): Store {
   }
 }
 
-let appStore: redux.Store<Store>;
+let appStore: redux.Store<AppState>;
 
-export function getStore(): redux.Store<Store> {
+export function getStore(): redux.Store<AppState> {
   return appStore ? appStore : (appStore = redux.createStore(reducer,
       (window as any)['__REDUX_DEVTOOLS_EXTENSION__'] && (window as any)['__REDUX_DEVTOOLS_EXTENSION__']()));
 }
@@ -95,6 +110,7 @@ export function apiUrl(path: string): string {
 
 /** Actions **/
 
+export const AC_NOP = 'AC_NOP';
 export const AC_MESSAGE = 'AC_MESSAGE';
 export const AC_CONNECT = 'AC_CONNECT';
 export const AC_LOAD_SHELF = 'AC_LOAD_SHELF';
@@ -156,6 +172,13 @@ export function makeApiAction(path: string, actionType: string): IAsyncAction {
   return getAction;
 }
 
+export const doConnect = (): redux.Action => {
+  if (!getStore().getState().conn.isConnected) {
+    return makeApiAction('/server-info/', AC_CONNECT);
+  } else {
+    return { type: AC_NOP };
+  }
+};
 export const getShelfResults = makeApiAction.bind(null, '/resources/', AC_LOAD_SHELF);
 export const loadResource = (uuid: string): IAsyncAction => {
   return makeApiAction(`/resource/${uuid}`, AC_LOAD_RESOURCE);

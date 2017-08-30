@@ -1,0 +1,17 @@
+.shelf {
+  border-collapse: collapse;
+  width: 100%;
+  cursor: pointer;
+
+  &__row {
+    &--active {
+      background: #7373af;
+      color: white;
+    }
+  }
+
+  &__cell {
+    border: 1px solid lightgray;
+    padding: 0.4rem 0.5rem;
+  }
+}

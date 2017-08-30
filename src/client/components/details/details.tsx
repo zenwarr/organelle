@@ -1,7 +1,7 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {KnownGroupTypes, ObjectRole, PersonRelation, FullResourceData} from "../../../common/db";
-import {Store} from "../../store/store";
+import {KnownGroupTypes, ObjectRole, FullResourceData} from "../../../common/db";
+import {AppState} from "../../store/store";
 
 interface DetailsProps {
   activeResource: FullResourceData;
@@ -44,7 +44,7 @@ class Details extends React.Component<DetailsProps> {
   }
 }
 
-export const CDetails = connect((state: Store) => {
+export const CDetails = connect((state: AppState) => {
   return {
     activeResource: state.activeResource
   };

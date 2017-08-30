@@ -1,39 +1,36 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {getShelfResults, Store} from "../../store/store";
+import {AppState} from "../../store/store";
 import {CConnectionStatus} from "../connection-status/connection-status";
 import {CShelf} from "../shelf/shelf";
 import {CStatusBar} from "../status/status";
 import {CDetails} from "../details/details";
+require('./app.scss');
 
-interface AppProps {
-  connect(): void;
-}
-
-export class App extends React.Component<AppProps> {
+export class App extends React.Component {
   render() {
-    return <div>
-      <h1>Hello! My name is Organelle!</h1>
-      <CConnectionStatus />
-      <CShelf />
+    return <div className="app">
+      <div className="app__connection-status">
+        <CConnectionStatus />
+      </div>
 
-      <CDetails />
+      <div className="app__main">
+        <div className="app__shelf">
+          <CShelf />
+        </div>
 
-      <button onClick={this.props.connect}>
-        Connect to library...
-      </button>
+        <div className="app__details">
+          <CDetails />
+        </div>
+      </div>
 
-      <CStatusBar />
+      <div className="app__statusbar">
+        <CStatusBar />
+      </div>
     </div>;
   }
 }
 
-export const CApp = connect((state: Store) => {
+export const CApp = connect((state: AppState) => {
   return { };
-}, (dispatch) => {
-  return {
-    connect: () => {
-      dispatch(getShelfResults());
-    }
-  }
 })(App);

@@ -2,6 +2,7 @@ const webpack = require('webpack');
 const webpackCommon = require('./common');
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const ExtractTextPlugin = require('extract-text-webpack-plugin');
 
 module.exports = [
   {
@@ -71,12 +72,18 @@ module.exports = [
           enforce: 'pre',
           test: /\.js$/,
           loader: 'source-map-loader'
+        },
+        {
+          test: /\.scss$/,
+          loaders: ExtractTextPlugin.extract('css-loader!sass-loader')
         }
       ]
     },
 
     plugins: [new HtmlWebpackPlugin({
       title: 'Organelle'
+    }), new ExtractTextPlugin('style.css', {
+      allChunks: true
     })]
   }
 ];

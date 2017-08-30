@@ -5,7 +5,7 @@ import * as chai from 'chai';
 import * as chaiAsPromised from "chai-as-promised";
 import {DatabaseWithOptions} from "../../server/db";
 import {CriterionEqual, CriterionOr, LibraryDatabase, SortMode} from "../../server/library-db";
-import uuid = require("uuid");
+import * as uuid from 'uuid';
 import {dateToTimestamp} from "../../server/common";
 import * as sinon from 'sinon';
 import {KnownGroupTypes, ObjectRole, PersonRelation, Resource} from "../../common/db";

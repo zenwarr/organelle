@@ -71,6 +71,8 @@ export class LibraryServer {
       }
     }
 
+    this._server.get('/server-info/', wrap(this._handleServerInfo));
+
     // list of all registered resources
     this._server.get('/resources/', wrap(this._handleResources));
 
@@ -232,6 +234,14 @@ export class LibraryServer {
     return {
       type: 'object_tag',
       tag: tag
+    };
+  }
+
+  protected async _handleServerInfo(params: any, query: any): Promise<any> {
+    return {
+      app: 'Organelle',
+      version: '1',
+      name: (await this._lib.libraryDatabase.getOption('name', ''))
     };
   }
 

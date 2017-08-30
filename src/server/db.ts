@@ -130,12 +130,12 @@ export class DatabaseWithOptions extends Database {
    * @param {string} name Option name
    * @returns {string|null} Option value or null if the option does not exist
    */
-  getOption(name: string): string|null {
+  getOption(name: string, def?: string): string|null {
     name = name.toLowerCase();
     if (this._config.hasOwnProperty(name)) {
       return this._config[name];
     } else {
-      return null;
+      return def == null ? null : def;
     }
   }
 

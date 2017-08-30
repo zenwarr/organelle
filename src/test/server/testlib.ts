@@ -1,4 +1,4 @@
-import uuid = require("uuid");
+import * as uuid from 'uuid';
 import {LibraryDatabase} from "../../server/library-db";
 import {KnownGroupTypes, PersonRelation} from "../../common/db";
 
