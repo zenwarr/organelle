@@ -364,6 +364,7 @@ describe('dbs', function() {
             expect(res.publishDate == null).to.be.true;
             expect(res.publisher == null).to.be.true;
             expect(res.desc == null).to.be.true;
+            expect(res.type).to.be.equal('resource');
           }
 
           testObject(res);
@@ -1060,6 +1061,7 @@ describe('dbs', function() {
         let persons = await db.findPersons('Stephen King');
         expect(persons).to.have.lengthOf(1);
         expect(persons[0].uuid).to.be.equal(KING);
+        expect(persons[0].type).to.be.equal('person');
       });
 
       it("should return all persons if no search string given", async function () {

@@ -8,7 +8,7 @@ import {LibraryServer} from "../../server/library-server";
 import {Library} from "../../server/library";
 import * as supertest from 'supertest';
 import {OBJ1, StorageMock} from "./storage-mock";
-import {ObjectRole, PersonRelation} from "../../common/db";
+import {KnownGroupTypes, ObjectRole, PersonRelation} from "../../common/db";
 
 should();
 chai.use(chaiAsPromised);
@@ -119,8 +119,8 @@ describe("LibraryServer", function () {
             relatedPersons: [{
               name: 'Stephen King',
               nameSort: 'King, Stephen',
+              relation: PersonRelation.Author,
               type: 'related_person',
-              relation: 'author',
               uuid: testlib.KING
             }],
             relatedGroups: []
@@ -146,7 +146,7 @@ describe("LibraryServer", function () {
               type: 'related_person',
               name: 'Stephen King',
               nameSort: 'King, Stephen',
-              relation: 'author'
+              relation: PersonRelation.Author
             }
           ]);
         })
@@ -312,21 +312,21 @@ describe("LibraryServer", function () {
               desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters.",
               relatedObjects: [{
                 location: null,
-                role: "format",
+                role: ObjectRole.Format,
                 tag: "djvu",
                 type: "related_object",
                 uuid: "2uuid"
               },
               {
                 location: null,
-                role: "format",
+                role: ObjectRole.Format,
                 tag: "pdf",
                 type: "related_object",
                 uuid: "1uuid"
               },
               {
                 location: null,
-                role: "format",
+                role: ObjectRole.Format,
                 tag: "pdf",
                 type: "related_object",
                 uuid: "3uuid"
@@ -335,7 +335,7 @@ describe("LibraryServer", function () {
                 name: 'Stephen King',
                 nameSort: 'King, Stephen',
                 type: 'related_person',
-                relation: 'author',
+                relation: PersonRelation.Author,
                 uuid: testlib.KING
               }],
               relatedGroups: []
@@ -376,7 +376,12 @@ describe("LibraryServer", function () {
             type: 'group',
             title: 'english',
             titleSort: 'english',
-            groupType: 'langs'
+            groupType: {
+              exclusive: false,
+              name: 'langs',
+              ordered: false,
+              uuid: KnownGroupTypes.Language
+            }
           });
         })
         .end(done);

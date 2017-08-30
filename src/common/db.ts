@@ -1,7 +1,13 @@
+import * as iassign from 'immutable-assign';
+
+export interface AbstractDbObject {
+  type?: string;
+}
+
 /**
  * Resources are basic building blocks of a library. Any book or article or a magazine issue you store is a Resource.
  */
-export interface Resource {
+export interface Resource extends AbstractDbObject {
   uuid?: string|null;
 
   /**
@@ -87,7 +93,7 @@ export interface FullResourceData extends ExistingResource {
 /**
  * Any person that should be mentioned in library (author, translator or editor) is represented by such objects.
  */
-export interface Person {
+export interface Person extends AbstractDbObject {
   uuid?: string|null;
 
   /**
@@ -171,7 +177,7 @@ export interface NewRelatedPerson extends NewPerson {
  * with name = "cool books" and group type of KnownGroupTypes.Tags and create a relation between each cool book
  * and this group. You can create you own groups.
  */
-export interface Group {
+export interface Group extends AbstractDbObject {
   uuid?: string|null;
 
   /**
@@ -187,10 +193,10 @@ export interface Group {
   /**
    * Type of this group.
    */
-  groupType?: ExistingGroupType;
+  groupType?: ExistingGroupType|string;
 }
 
-export interface NewGroup {
+export interface NewGroup extends Group {
   uuid?: string|null;
   title: string;
   titleSort: string;
@@ -201,7 +207,7 @@ export interface UpdateGroup extends Group {
   uuid: string;
 }
 
-export interface ExistingGroup {
+export interface ExistingGroup extends Group {
   uuid: string;
   title: string;
   titleSort: string;
@@ -228,7 +234,7 @@ export interface RelatedGroup extends ExistingGroup {
  * Each group has a type. Any library supports a set of predefined group types (see a list below) with predefined UUIDs.
  * You can create you own group types, create groups of this type and link resources to these groups.
  */
-export interface GroupType {
+export interface GroupType extends AbstractDbObject {
   uuid?: string|null;
 
   /**
@@ -303,7 +309,7 @@ export function objectRoleFromString(text: string): ObjectRole {
   }
 }
 
-export interface RelatedObject {
+export interface RelatedObject extends AbstractDbObject {
   rowId?: number;
   resourceUuid?: string;
   uuid?: string|null;
@@ -341,4 +347,23 @@ export enum KnownGroupTypes {
   Series = '509d7919-5462-4687-89b4-97afebcac3eb',
   Category = '77c0939e-4dcc-4d30-a528-8385a3ce96e3',
   Language = '2dbbbec1-80c0-4be6-a55f-90d3586b3282'
+}
+
+export function objectFromAPI<T extends AbstractDbObject>(obj: any): T {
+  function getDate(input: string): Date {
+    let parsedTS = Date.parse(input);
+    return new Date(Number.isNaN(parsedTS) ? 0 : parsedTS);
+  }
+
+  let aobj = obj as AbstractDbObject;
+  switch (aobj.type) {
+    case 'resource':
+      return iassign(obj, newObj => {
+        (newObj as Resource).addDate = getDate(obj.addDate);
+        (newObj as Resource).lastModifyDate = getDate(obj.lastModifyDate);
+        return newObj;
+      }) as T;
+  }
+
+  return obj as T;
 }

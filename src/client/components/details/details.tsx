@@ -1,6 +1,6 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {KnownGroupTypes, ObjectRole, FullResourceData} from "../../../common/db";
+import {KnownGroupTypes, ObjectRole, FullResourceData, PersonRelation} from "../../../common/db";
 import {AppState} from "../../store/store";
 import {loadResource, unloadResource} from "../../store/actions";
 
@@ -44,7 +44,7 @@ class Details extends React.Component<DetailsProps> {
     let coverUrl: string = coverObject && coverObject.location ? coverObject.location : '';
 
     let authors = res.relatedPersons
-            .filter(p => (p.relation as any) === 'author')
+            .filter(p => p.relation === PersonRelation.Author)
             .map(p => p.name)
             .join(' & ');
 

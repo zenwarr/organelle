@@ -4,17 +4,14 @@ import * as restifyErrors from 'restify-errors';
 import {Database} from "./db";
 import {strictParseInt} from "../common/helpers";
 import {
-  ExistingPerson, ExistingResource, FullResourceData, ExistingGroup, RelatedPerson,
-  RelatedGroup,
-  ExistingRelatedObject,
-  ResolvedRelatedObject,
-  GroupType, objectRoleToString, ObjectRole, objectRoleFromString, personRelationFromString
+  ExistingResource, FullResourceData, ObjectRole, objectRoleFromString, personRelationFromString, AbstractDbObject, RelatedObject
 } from "../common/db";
 import {
   Criterion, ListOptions, CriterionOr, CriterionEqual, CriterionAnd,
   CriterionHasRelationWith, SortMode
 } from "./library-db";
-import {personRelationToString, PersonRelation} from "../common/db";
+import {PersonRelation} from "../common/db";
+import * as iassign from 'immutable-assign';
 
 export const DEF_SERVER_PORT = 8080;
 
@@ -31,13 +28,13 @@ export class LibraryServer {
   }
 
   start(port: number = DEF_SERVER_PORT): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>(resolve => {
       this._server.listen(port, resolve);
     });
   }
 
   stop(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<void>(resolve => {
       this._server.once('close', () => {
         resolve();
       });
@@ -148,96 +145,41 @@ export class LibraryServer {
     this._server.get('/locations/:uuid/', wrap(this._handleObjectLocations));
   }
 
-  protected _resourceToResponse(resource: ExistingResource): any {
-    return {
-      uuid: resource.uuid,
-      type: 'resource',
-      title: resource.title,
-      titleSort: resource.titleSort,
-      rating: resource.rating,
-      addDate: resource.addDate ? resource.addDate.toUTCString() : null,
-      lastModifyDate: resource.lastModifyDate ? resource.lastModifyDate.toUTCString() : null,
-      publishDate: resource.publishDate,
-      publisher: resource.publisher,
-      desc: resource.desc,
-    };
+  protected static _objectToResponse(obj: AbstractDbObject): any {
+    switch (obj.type) {
+      case 'resource':
+        return iassign(obj, newObj => {
+          let res = obj as ExistingResource;
+          (newObj as any).addDate = res.addDate.toUTCString();
+          (newObj as any).lastModifyDate = res.lastModifyDate.toUTCString();
+
+          if ((obj as FullResourceData).relatedPersons != null) {
+            let frd = obj as FullResourceData;
+            (newObj as FullResourceData).relatedObjects = frd.relatedObjects.map(obj => this._objectToResponse(obj));
+          }
+
+          return newObj;
+        });
+
+      case 'related_object':
+        return iassign(obj, newObj => {
+          delete (newObj as RelatedObject).rowId;
+          delete (newObj as RelatedObject).resourceUuid;
+          return newObj;
+        });
+    }
+
+    return obj;
   }
 
-  protected _fullResourceToResponse(resource: FullResourceData): any {
-    let res = (this._resourceToResponse(resource) as FullResourceData);
-    res.relatedPersons = resource.relatedPersons.map(x => this._relatedPersonToResponse(x));
-    res.relatedGroups = resource.relatedGroups.map(x => this._relatedGroupToResponse(x));
-    res.relatedObjects = resource.relatedObjects.map(x => this._resolvedObjectToResponse(x));
-    return res;
-  }
-
-  protected _personToResponse(person: ExistingPerson): any {
-    return {
-      uuid: person.uuid,
-      type: 'person',
-      name: person.name,
-      nameSort: person.nameSort,
-    };
-  }
-
-  protected _groupToResponse(group: ExistingGroup): any {
-    return {
-      uuid: group.uuid,
-      type: 'group',
-      title: group.title,
-      titleSort: group.titleSort,
-      groupType: (group.groupType as GroupType).name
-    };
-  }
-
-  protected _relatedPersonToResponse(person: RelatedPerson): any {
-    return {
-      uuid: person.uuid,
-      type: 'related_person',
-      name: person.name,
-      nameSort: person.nameSort,
-      relation: personRelationToString(person.relation)
-    };
-  }
-
-  protected _relatedGroupToResponse(group: RelatedGroup): any {
-    return {
-      uuid: group.uuid,
-      type: 'related_group',
-      title: group.title,
-      titleSort: group.titleSort,
-      groupIndex: group.groupIndex,
-      relationTag: group.relationTag
-    };
-  }
-
-  protected _relatedObjectToReponse(object: ExistingRelatedObject): any {
-    return {
-      uuid: object.uuid,
-      type: 'related_object',
-      role: objectRoleToString(object.role as ObjectRole),
-      tag: object.tag
-    };
-  }
-
-  protected _resolvedObjectToResponse(object: ResolvedRelatedObject): any {
-    return {
-      uuid: object.uuid,
-      type: 'related_object',
-      role: objectRoleToString(object.role as ObjectRole),
-      tag: object.tag,
-      location: object.location
-    };
-  }
-
-  protected _objectTagToResponse(tag: string): any {
+  protected static _objectTagToResponse(tag: string): any {
     return {
       type: 'object_tag',
       tag: tag
     };
   }
 
-  protected async _handleServerInfo(params: any, query: any): Promise<any> {
+  protected async _handleServerInfo(): Promise<any> {
     return {
       app: 'Organelle',
       version: '1',
@@ -246,49 +188,49 @@ export class LibraryServer {
   }
 
   protected async _handleResources(params: any, query: any): Promise<any> {
-    let opts = this._listOptionsFromQuery(query);
-    return (await this._lib.libraryDatabase.findResourcesByCriteria(null, opts)).map(value => this._resourceToResponse(value));
+    let opts = LibraryServer._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findResourcesByCriteria(null, opts)).map(value => LibraryServer._objectToResponse(value));
   }
 
   protected async _handleResource(params: { uuid?: string }): Promise<any> {
-    let uuid: string = this._extractUuid(params);
+    let uuid: string = LibraryServer._extractUuid(params);
 
     let resource = await this._lib.getFullResourceData(uuid);
     if (resource == null) {
       throw new restifyErrors.ResourceNotFoundError('Resource does not exist');
     }
 
-    return this._fullResourceToResponse(resource);
+    return LibraryServer._objectToResponse(resource);
   }
 
   protected async _handleRelatedPersons(params: { uuid?: string, relations?: string }, query: any): Promise<any> {
-    let resource: string = this._extractUuid(params);
+    let resource: string = LibraryServer._extractUuid(params);
 
     let crit: Criterion|null = null;
     if (params.relations != null) {
       crit = this._relationsCriterion(params.relations);
     }
 
-    let options = this._listOptionsFromQuery(query);
+    let options = LibraryServer._listOptionsFromQuery(query);
 
-    return (await this._lib.libraryDatabase.relatedPersons(resource, crit, options)).map(x => this._relatedPersonToResponse(x));
+    return (await this._lib.libraryDatabase.relatedPersons(resource, crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handleRelatedGroups(params: { uuid?: string, groupTypes?: string }, query: any): Promise<any> {
-    let resource: string = this._extractUuid(params);
+    let resource: string = LibraryServer._extractUuid(params);
 
     let crit: Criterion|null = null;
     if (params.groupTypes != null) {
       crit = this._groupTypesCriterion(params.groupTypes);
     }
 
-    let options = this._listOptionsFromQuery(query);
+    let options = LibraryServer._listOptionsFromQuery(query);
 
-    return (await this._lib.libraryDatabase.relatedGroups(resource, crit, options)).map(x => this._relatedGroupToResponse(x));
+    return (await this._lib.libraryDatabase.relatedGroups(resource, crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handleRelatedObjects(params: { uuid?: string, roles?: string, tags?: string }, query: any): Promise<any> {
-    let resource: string = this._extractUuid(params);
+    let resource: string = LibraryServer._extractUuid(params);
 
     let crit: Criterion|null = null;
     if (params.tags != null) {
@@ -317,9 +259,9 @@ export class LibraryServer {
       crit = crit == null ? roleCrit : new CriterionAnd(crit, roleCrit);
     }
 
-    let options = this._listOptionsFromQuery(query);
+    let options = LibraryServer._listOptionsFromQuery(query);
 
-    return (await this._lib.libraryDatabase.relatedObjects(resource, crit, options)).map(x => this._relatedObjectToReponse(x));
+    return (await this._lib.libraryDatabase.relatedObjects(resource, crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handleGroups(params: { groupTypes?: string }, query: any): Promise<any> {
@@ -328,26 +270,26 @@ export class LibraryServer {
       crit = this._groupTypesCriterion(params.groupTypes);
     }
 
-    let options = this._listOptionsFromQuery(query);
+    let options = LibraryServer._listOptionsFromQuery(query);
 
-    return (await this._lib.libraryDatabase.findGroupsByCriteria(crit, options)).map(group => this._groupToResponse(group));
+    return (await this._lib.libraryDatabase.findGroupsByCriteria(crit, options)).map(group => LibraryServer._objectToResponse(group));
   }
 
   protected async _handleGroup(params: { uuid?: string }, query: any): Promise<any> {
-    let uuid: string = this._extractUuid(params);
+    let uuid: string = LibraryServer._extractUuid(params);
 
     let group = await this._lib.libraryDatabase.getGroup(uuid);
     if (!group) {
       throw new restifyErrors.ResourceNotFoundError();
     }
 
-    return this._groupToResponse(group);
+    return LibraryServer._objectToResponse(group);
   }
 
   protected async _handleGroupsResources(params: { uuid?: string, groupTypes?: string }, query: any): Promise<any> {
     let crit: Criterion|null = null;
     if (params.uuid != null) {
-      crit = new CriterionEqual('groups#uuid', this._extractUuid(params));
+      crit = new CriterionEqual('groups#uuid', LibraryServer._extractUuid(params));
     } else if (params.groupTypes != null) {
       let gtCrit = this._groupTypesCriterion(params.groupTypes, 'groups');
       crit = crit == null ? gtCrit : new CriterionAnd(crit, gtCrit);
@@ -355,9 +297,8 @@ export class LibraryServer {
       throw new restifyErrors.BadRequestError('No uuid and no group types specified in the request');
     }
 
-    let options = this._listOptionsFromQuery(query);
-
-    return (await this._lib.libraryDatabase.findResourcesByCriteria(crit)).map(x => this._resourceToResponse(x));
+    let options = LibraryServer._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findResourcesByCriteria(crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handlePersons(params: { relations?: string }, query: any): Promise<any> {
@@ -366,15 +307,15 @@ export class LibraryServer {
       crit = new CriterionHasRelationWith(this._relationsCriterion(params.relations));
     }
 
-    let options = this._listOptionsFromQuery(query);
-    return (await this._lib.libraryDatabase.findPersonsByCriteria(crit, options)).map(x => this._personToResponse(x));
+    let options = LibraryServer._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findPersonsByCriteria(crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handlePersonResources(params: { uuid?: string, relations?: string }, query: any): Promise<any> {
     let crit: Criterion|null = null;
 
     if (params.uuid != null) {
-      crit = new CriterionEqual('persons#uuid', this._extractUuid(params));
+      crit = new CriterionEqual('persons#uuid', LibraryServer._extractUuid(params));
     }
 
     if (params.relations != null) {
@@ -382,17 +323,17 @@ export class LibraryServer {
       crit = crit == null ? relCrit : new CriterionAnd(crit, relCrit);
     }
 
-    let options = this._listOptionsFromQuery(query);
-    return (await this._lib.libraryDatabase.findResourcesByCriteria(crit, options)).map(x => this._resourceToResponse(x));
+    let options = LibraryServer._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findResourcesByCriteria(crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handlePerson(params: { uuid?: string}, query: any): Promise<any> {
-    let uuid: string = this._extractUuid(params);
+    let uuid: string = LibraryServer._extractUuid(params);
     let person = await this._lib.libraryDatabase.getPerson(uuid);
     if (!person) {
       throw new restifyErrors.ResourceNotFoundError(`Person does not exist`);
     }
-    return this._personToResponse(person);
+    return LibraryServer._objectToResponse(person);
   }
 
   protected async _handleObjects(params: { tags?: string }, query: any): Promise<any> {
@@ -408,12 +349,12 @@ export class LibraryServer {
       crit = new CriterionOr(...tagList.map(tag => new CriterionEqual('tag', tag)));
     }
 
-    let options = this._listOptionsFromQuery(query);
-    return (await this._lib.libraryDatabase.findObjectsByCriteria(crit, options)).map(x => this._relatedObjectToReponse(x));
+    let options = LibraryServer._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.findObjectsByCriteria(crit, options)).map(x => LibraryServer._objectToResponse(x));
   }
 
   protected async _handleObjectLocations(params: { uuid?: string }): Promise<any> {
-    let uuid = this._extractUuid(params);
+    let uuid = LibraryServer._extractUuid(params);
 
     let result: { type: string, location: string }[] = [];
     for (let loc of this._lib.objectLocations(uuid)) {
@@ -426,8 +367,8 @@ export class LibraryServer {
   }
 
   protected async _handleObjectsTags(params: any, query: any): Promise<any> {
-    let options = this._listOptionsFromQuery(query);
-    return (await this._lib.libraryDatabase.getObjectsTags(options)).map(x => this._objectTagToResponse(x));
+    let options = LibraryServer._listOptionsFromQuery(query);
+    return (await this._lib.libraryDatabase.getObjectsTags(options)).map(x => LibraryServer._objectTagToResponse(x));
   }
 
   protected _groupTypesCriterion(gtNames: string, prefix?: string): Criterion {
@@ -464,7 +405,7 @@ export class LibraryServer {
     return new CriterionOr(...relationList.map(relation => new CriterionEqual(prop, relation)));
   }
 
-  protected _listOptionsFromQuery(query: any): ListOptions {
+  protected static _listOptionsFromQuery(query: any): ListOptions {
     let result:ListOptions = { };
 
     if (query.sort != null) {
@@ -525,7 +466,7 @@ export class LibraryServer {
     return result;
   }
 
-  protected _extractUuid(obj: { uuid?: string} ): string {
+  protected static _extractUuid(obj: { uuid?: string} ): string {
     try {
       return Database.validateId(obj.uuid);
     } catch (err) {

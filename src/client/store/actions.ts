@@ -1,6 +1,7 @@
 import {Action} from "redux";
 import {apiUrl, getStore} from "./store";
 import * as request from 'superagent';
+import {objectFromAPI} from "../../common/db";
 
 export const AC_NOP = 'AC_NOP';
 export const AC_CONNECT = 'AC_CONNECT';
@@ -40,7 +41,7 @@ export function makeApiAction(path: string, actionType: string): IAsyncAction {
         type: actionType,
         pending: false,
         error: null,
-        result: resp.body
+        result: objectFromAPI(resp.body)
       };
       getStore().dispatch(successAction);
     } else {

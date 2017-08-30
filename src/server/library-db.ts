@@ -5,7 +5,8 @@ import {schema} from "./schema";
 import {
   ExistingGroupType, ExistingResource, KnownGroupTypes, NewGroupType, NewResource, PersonRelation,
   UpdateGroupType, UpdateResource, ExistingPerson, NewPerson, UpdatePerson, ExistingGroup, NewGroup, UpdateGroup,
-  RelatedPerson, RelatedGroup, ObjectRole, ExistingRelatedObject, NewRelatedObject, UpdateRelatedObject
+  RelatedPerson, RelatedGroup, ObjectRole, ExistingRelatedObject, NewRelatedObject, UpdateRelatedObject,
+  AbstractDbObject
 } from "../common/db";
 
 export const CUR_LIBRARY_VERSION = 1;
@@ -1124,7 +1125,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       new GroupTypeFieldSpec('groupType', 'type', this)
   ]);
 
-  protected _groupRelationViewSpec = new EntrySpec('res_to_groups_view', 'resources to groups view', [
+  protected _groupRelationViewSpec = new EntrySpec('res_to_groups_view', 'related_group', [
       new UuidFieldSpec('uuid', 'linked_id'),
       new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
       new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
@@ -1190,7 +1191,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     let stmt = await this.db.run(`UPDATE ${spec.table} SET ${setClause} WHERE uuid = ?`, bound);
 
     if (stmt.changes === 0) {
-      throw new Error(`Cannot update ${spec.human}: no entry with given UUID have been found`);
+      throw new Error(`Cannot update ${spec.objectType}: no entry with given UUID have been found`);
     }
   }
 
@@ -1212,7 +1213,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     await this.db.run(`INSERT INTO ${spec.table}(${intoClause}) VALUES(${valuesClause})`, bound);
 
-    return workaroundSpread(entry, entryUuid);
+    return workaroundSpread(entry, entryUuid, spec.objectType);
   }
 
   protected async _removeEntry<T>(uuid: string, spec: EntrySpec): Promise<void> {
@@ -1599,12 +1600,12 @@ namespace PropValidators {
 }
 
 class EntrySpec {
-  constructor(protected _table: string, protected _human: string, protected _fieldSpecs: FieldSpec[],
+  constructor(protected _table: string, protected _objectType: string, protected _fieldSpecs: FieldSpec[],
               protected _id: string = 'uuid', protected _keys: { [name: string]: string } = {}) { }
 
   get fieldSpecs(): FieldSpec[] { return this._fieldSpecs; }
   get table(): string { return this._table; }
-  get human(): string { return this._human; }
+  get objectType(): string { return this._objectType; }
   get id(): string { return this._id; }
 
   linkColumn(table: EntrySpec): string|null {
@@ -1642,7 +1643,7 @@ class EntrySpec {
     return this._fieldSpecs.some(spec => spec.column === column);
   }
 
-  rowToEntry<T>(row: { [name: string]: any }, completeObject?: { [name: string]: any }): T {
+  rowToEntry<T extends AbstractDbObject>(row: { [name: string]: any }, completeObject?: { [name: string]: any }): T {
     let result: { [name: string]: any };
     if (completeObject != null) {
       result = completeObject;
@@ -1657,6 +1658,7 @@ class EntrySpec {
       }
     });
 
+    result.type = this.objectType;
     return result as T;
   }
 }
@@ -1817,7 +1819,7 @@ const PersonSpec = new EntrySpec('persons', 'person', [
     new GenericFieldSpec('nameSort', 'name_sort', PropValidators.String, PropValidators.String)
 ]);
 
-const ObjectSpec = new EntrySpec('objects', 'object', [
+const ObjectSpec = new EntrySpec('objects', 'related_object', [
     new GenericFieldSpec('rowId', 'id', PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
         PropValidators.Number),
     new UuidFieldSpec('resourceUuid', 'res_id'),
@@ -1826,28 +1828,28 @@ const ObjectSpec = new EntrySpec('objects', 'object', [
     new GenericFieldSpec('tag', 'tag', PropValidators.String, PropValidators.String),
 ], 'rowId');
 
-const GroupTypeSpec = new EntrySpec('group_types', 'group type', [
+const GroupTypeSpec = new EntrySpec('group_types', 'group_type', [
     new UuidFieldSpec(),
     new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
     new GenericFieldSpec('exclusive', 'exclusive', PropValidators.Boolean, PropValidators.Boolean),
     new GenericFieldSpec('ordered', 'ordered', PropValidators.Boolean, PropValidators.Boolean)
 ]);
 
-const PersonRelationSpec = new EntrySpec('res_to_persons', 'person relation', [
+const PersonRelationSpec = new EntrySpec('res_to_persons', 'related_person', [
     new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number)
 ], undefined, {
   res_id: 'resources',
   person_id: 'persons'
 });
 
-const PersonRelationViewSpec = new EntrySpec('res_to_persons_view', 'person relation view', [
+const PersonRelationViewSpec = new EntrySpec('res_to_persons_view', 'related_person', [
   new UuidFieldSpec('uuid', 'linked_id'),
   new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number),
   new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
   new GenericFieldSpec('nameSort', 'name_sort', PropValidators.String, PropValidators.String)
 ]);
 
-const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
+const GroupRelationSpec = new EntrySpec('res_to_groups', 'related_group', [
   new GenericFieldSpec('groupIndex', 'group_index',
       PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
       PropValidators.Number,
@@ -1869,12 +1871,13 @@ const GroupRelationSpec = new EntrySpec('res_to_groups', 'group relation', [
  * https://github.com/Microsoft/TypeScript/issues/13557
  * As soon as the issue will be fixed, this function needs to be removed.
  */
-function workaroundSpread(obj: { [name: string]: any }, uuid: string): any {
+function workaroundSpread(obj: { [name: string]: any }, uuid: string, objectType: string): any {
   let result: { [name: string]: any } = {};
   Object.keys(obj).forEach(prop => {
     result[prop] = obj[prop];
   });
   result.uuid = uuid;
+  result.type = objectType;
   return result;
 }
 
