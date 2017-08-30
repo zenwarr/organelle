@@ -5,18 +5,18 @@ require('./status.scss');
 
 interface StatusBarProps {
   message: string;
-  operationPending: boolean;
+  pendingCount: number;
 }
 
 export const StatusBar = (props: StatusBarProps): JSX.Element => {
   return <div className="status-bar">
-    {props.message} {props.operationPending && "..."}
+    {props.message} Pending operations: {props.pendingCount}
   </div>
 };
 
 export const CStatusBar = connect((state: AppState) => {
   return {
-    message: state.message,
-    operationPending: state.operationPending
+    message: state.operations.lastError,
+    pendingCount: state.operations.pendingCount
   };
 })(StatusBar);

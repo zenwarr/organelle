@@ -27,7 +27,7 @@ class ConnectionStatus extends React.Component<ConnectionStatusProps> {
 
 export const CConnectionStatus = connect((state: AppState) => {
   return {
-    isConnected: state.conn && state.conn.isConnected
+    isConnected: state.connection.isConnected
   };
 }, (dispatch) => {
   return {

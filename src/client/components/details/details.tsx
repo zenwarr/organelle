@@ -46,6 +46,6 @@ class Details extends React.Component<DetailsProps> {
 
 export const CDetails = connect((state: AppState) => {
   return {
-    activeResource: state.activeResource
+    activeResource: state.shelf.activeResource
   };
 })(Details);
