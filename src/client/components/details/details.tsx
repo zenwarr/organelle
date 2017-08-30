@@ -1,13 +1,35 @@
 import * as React from "react";
 import {connect} from "react-redux";
 import {KnownGroupTypes, ObjectRole, FullResourceData} from "../../../common/db";
-import {AppState} from "../../store/store";
+import {AppState, loadResource, unloadResource} from "../../store/store";
 
 interface DetailsProps {
-  activeResource: FullResourceData;
+  activeIndex: number;
+  activeResource: FullResourceData|null;
+  shelfResults: FullResourceData[]|null;
+  loadResource: (resource: FullResourceData) => void;
+  unloadResource: () => void;
 }
 
 class Details extends React.Component<DetailsProps> {
+  loadActiveResource(props: DetailsProps): void {
+    if (props.activeIndex < 0 || (props.shelfResults && props.activeIndex >= props.shelfResults.length)) {
+      this.props.unloadResource();
+    } else if (props.shelfResults) {
+      if (!props.activeResource || props.shelfResults[props.activeIndex].uuid !== props.activeResource.uuid) {
+        this.props.loadResource(props.shelfResults[props.activeIndex]);
+      }
+    }
+  }
+
+  componentWillReceiveProps(newProps: DetailsProps) {
+    this.loadActiveResource(newProps);
+  }
+
+  componentDidMount(): void {
+    this.loadActiveResource(this.props);
+  }
+
   render(): JSX.Element {
     if (!this.props.activeResource) {
       return <div>
@@ -46,6 +68,17 @@ class Details extends React.Component<DetailsProps> {
 
 export const CDetails = connect((state: AppState) => {
   return {
-    activeResource: state.shelf.activeResource
+    activeResource: state.shelf.activeResource,
+    activeIndex: state.shelf.activeIndex,
+    shelfResults: state.shelf.shelfResults
   };
+}, (dispatch) => {
+  return {
+    loadResource: (res: FullResourceData) => {
+      dispatch(loadResource(res.uuid));
+    },
+    unloadResource: () => {
+      dispatch(unloadResource());
+    }
+  }
 })(Details);

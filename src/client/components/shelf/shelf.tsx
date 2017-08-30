@@ -9,16 +9,12 @@ interface ShelfProps {
   isConnected: boolean;
   activeIndex: number;
   setActiveIndex: (index: number) => void;
-  setActiveResource: (res: FullResourceData) => void;
   getShelfResults: () => void;
 }
 
 class Shelf extends React.Component<ShelfProps> {
   selectRow(index: number): void {
     this.props.setActiveIndex(index);
-    if (this.props.shelfResults && index >= 0 && index < this.props.shelfResults.length) {
-      this.props.setActiveResource(this.props.shelfResults[index]);
-    }
   }
 
   getShelfResults(props: ShelfProps): void {
@@ -52,16 +48,18 @@ class Shelf extends React.Component<ShelfProps> {
   }
 
   render(): JSX.Element {
-    return <table className="shelf" onKeyDown={this.onKeyDown.bind(this)} tabIndex={0}>
-      <tbody className="shelf__body">
+    return <div className="shelf" onKeyDown={this.onKeyDown.bind(this)} tabIndex={0}>
+      <table className="shelf__table">
+        <tbody className="shelf__body">
         {this.props.shelfResults && this.props.shelfResults.map((res: FullResourceData, index) => {
           let className = 'shelf__row' + (index === this.props.activeIndex ? ' shelf__row--active' : '');
           return <tr className={className} key={index} onClick={this.selectRow.bind(this, index)}>
             <td className="shelf__cell">{res.title}</td>
           </tr>
         })}
-      </tbody>
-    </table>;
+        </tbody>
+      </table>
+    </div>;
   }
 }
 
@@ -73,9 +71,6 @@ export const CShelf = connect((state: AppState) => {
   }
 }, (dispatch) => {
   return {
-    setActiveResource: (res: FullResourceData) => {
-      dispatch(loadResource(res.uuid));
-    },
     setActiveIndex: (index: number) => {
       dispatch(selectResource(index));
     },

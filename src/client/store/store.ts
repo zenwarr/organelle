@@ -82,7 +82,17 @@ function shelf(prev: ShelfState, action: IGenericAction): ShelfState {
     case AC_LOAD_SHELF: {
       if (asyncDone(action)) {
         return iassign(prev, prev => {
-          prev.shelfResults = (action as IAsyncAction).result;
+          let result = (action as IAsyncAction).result;
+          prev.shelfResults = result;
+          if (result && result.length > 0) {
+            if (prev.activeIndex < 0) {
+              prev.activeIndex = 0;
+            } else if (prev.activeIndex >= result.length) {
+              prev.activeIndex = result.length - 1;
+            }
+          } else {
+            prev.activeIndex = -1;
+          }
           return prev;
         })
       }
@@ -97,11 +107,17 @@ function shelf(prev: ShelfState, action: IGenericAction): ShelfState {
       }
     } break;
 
+    case AC_UNLOAD_RESOURCE:
+      return iassign(prev, prev => {
+        prev.activeResource = null;
+        return prev;
+      });
+
     case AC_SELECT_RESOURCE:
       return iassign(prev, prev => {
         prev.activeIndex = (action as ISelectResourceAction).index;
         return prev;
-      })
+      });
   }
 
   return prev;
@@ -135,6 +151,7 @@ export const AC_NOP = 'AC_NOP';
 export const AC_CONNECT = 'AC_CONNECT';
 export const AC_LOAD_SHELF = 'AC_LOAD_SHELF';
 export const AC_LOAD_RESOURCE = 'AC_LOAD_RESOURCE';
+export const AC_UNLOAD_RESOURCE = 'AC_UNLOAD_RESOURCE';
 export const AC_SELECT_RESOURCE = 'AC_SELECT_RESOURCE';
 
 interface IGenericAction extends redux.Action {
@@ -211,4 +228,9 @@ export const selectResource = (index: number): ISelectResourceAction => {
     type: AC_SELECT_RESOURCE,
     index
   }
+};
+export const unloadResource = (): IGenericAction => {
+  return {
+    type: AC_UNLOAD_RESOURCE
+  };
 };
