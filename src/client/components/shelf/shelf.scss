@@ -3,6 +3,10 @@
   width: 100%;
   cursor: pointer;
 
+  &:focus {
+    outline: none;
+  }
+
   &__row {
     &--active {
       background: #7373af;

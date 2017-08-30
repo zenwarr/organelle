@@ -35,8 +35,24 @@ class Shelf extends React.Component<ShelfProps> {
     this.getShelfResults(this.props);
   }
 
+  onKeyDown(e: React.KeyboardEvent<HTMLElement>): void {
+    switch (e.key) {
+      case 'ArrowUp':
+        if (this.props.activeIndex > 0) {
+          this.selectRow(this.props.activeIndex - 1);
+        }
+        break;
+
+      case 'ArrowDown':
+        if (this.props.shelfResults && this.props.activeIndex + 1 < this.props.shelfResults.length) {
+          this.selectRow(this.props.activeIndex + 1);
+        }
+        break;
+    }
+  }
+
   render(): JSX.Element {
-    return <table className="shelf">
+    return <table className="shelf" onKeyDown={this.onKeyDown.bind(this)} tabIndex={0}>
       <tbody className="shelf__body">
         {this.props.shelfResults && this.props.shelfResults.map((res: FullResourceData, index) => {
           let className = 'shelf__row' + (index === this.props.activeIndex ? ' shelf__row--active' : '');
