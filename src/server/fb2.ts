@@ -64,7 +64,7 @@ function extensionFromType(type: string, def: string): string {
       return '.png';
 
     case 'image/bmp':
-      return '.bpm';
+      return '.bmp';
 
     default:
       return def;
