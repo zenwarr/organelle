@@ -1,6 +1,7 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {doConnect, AppState} from "../../store/store";
+import {AppState} from "../../store/store";
+import {doConnect} from "../../store/actions";
 require('./connection-status.scss');
 
 interface ConnectionStatusProps {

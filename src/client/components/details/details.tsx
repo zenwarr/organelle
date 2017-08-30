@@ -1,7 +1,8 @@
 import * as React from "react";
 import {connect} from "react-redux";
 import {KnownGroupTypes, ObjectRole, FullResourceData} from "../../../common/db";
-import {AppState, loadResource, unloadResource} from "../../store/store";
+import {AppState} from "../../store/store";
+import {loadResource, unloadResource} from "../../store/actions";
 
 interface DetailsProps {
   activeIndex: number;

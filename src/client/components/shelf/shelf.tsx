@@ -1,7 +1,8 @@
 import * as React from "react";
-import {getShelfResults, loadResource, AppState, selectResource} from "../../store/store";
+import {AppState} from "../../store/store";
 import {connect} from "react-redux";
 import {FullResourceData} from "../../../common/db";
+import {getShelfResults, selectResource} from "../../store/actions";
 require('./shelf.scss');
 
 interface ShelfProps {
