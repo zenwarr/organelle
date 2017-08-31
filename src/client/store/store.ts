@@ -1,5 +1,5 @@
 import * as redux from 'redux';
-import {FullResourceData} from "../../common/db";
+import {ExistingResource, FullResourceData} from "../../common/db";
 import {getReducer} from "./reducers";
 
 export interface AppState {
@@ -20,7 +20,7 @@ export interface OperationsState {
 
 export interface ShelfState {
   activeResource: FullResourceData|null;
-  shelfResults: FullResourceData[]|null;
+  shelfResults: ExistingResource[]|null;
   activeIndex: number;
 }
 
