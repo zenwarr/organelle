@@ -30,7 +30,7 @@ export const RES_COUNT: number = 9,
     TAG_COUNT = 2,
     LANG_COUNT = 2;
 
-export async function createTestLib(): Promise<LibraryDatabase> {
+export async function createTestLib(withRelations: boolean = true): Promise<LibraryDatabase> {
   let db = new LibraryDatabase(':memory:');
   await db.create();
 
@@ -191,9 +191,11 @@ export async function createTestLib(): Promise<LibraryDatabase> {
     titleSort: 'Cool Series, The'
   });
 
-  await db.addPersonRelation(MIST, KING, PersonRelation.Author);
+  if (withRelations) {
+    await db.addPersonRelation(MIST, KING, PersonRelation.Author);
 
-  await db.addGroupRelation(MIST, SERIES1, 1);
+    await db.addGroupRelation(MIST, SERIES1, 1);
+  }
 
   return db;
 }

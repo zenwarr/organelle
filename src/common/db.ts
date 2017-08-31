@@ -30,7 +30,7 @@ export interface Resource extends AbstractDbObject {
    * rating to a user.
    * Value of this field should be in [0...500] range (inclusive).
    */
-  rating?: number;
+  rating?: number|null;
 
   /**
    * Indicates when the resource have been added to a library.
@@ -50,17 +50,17 @@ export interface Resource extends AbstractDbObject {
    * information is useless and some people want to provide more precise information on book contents itself).
    * You still can store a Date object here, and it will be correctly handled.
    */
-  publishDate?: string|Date;
+  publishDate?: string|Date|null;
 
   /**
    * Publisher, if it makes any sense to the resource.
    */
-  publisher?: string;
+  publisher?: string|null;
 
   /**
    * Description of the resource.
    */
-  desc?: string;
+  desc?: string|null;
 }
 
 export interface NewResource extends Resource {
@@ -76,12 +76,20 @@ export interface ExistingResource extends Resource {
   uuid: string;
   title: string;
   titleSort: string;
-  rating: number;
+  rating: number|null;
   addDate: Date;
   lastModifyDate: Date;
-  publishDate: string|Date;
-  publisher: string;
-  desc: string;
+  publishDate: string|Date|null;
+  publisher: string|null;
+  desc: string|null;
+  persons: {
+    name: string,
+    relation: PersonRelation
+  }[];
+  groups: {
+    title: string;
+    groupTypeName: string;
+  }[];
 }
 
 export interface FullResourceData extends ExistingResource {

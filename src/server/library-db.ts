@@ -8,6 +8,7 @@ import {
   RelatedPerson, RelatedGroup, ObjectRole, ExistingRelatedObject, NewRelatedObject, UpdateRelatedObject,
   AbstractDbObject
 } from "../common/db";
+import {strictParseInt} from "../common/helpers";
 
 export const CUR_LIBRARY_VERSION = 1;
 
@@ -236,10 +237,10 @@ export class LibraryDatabase extends DatabaseWithOptions {
   /**
    * Get a resource with given UUID.
    * @param {string} uuid UUID of the resource to find.
-   * @returns {Promise<Resource|null>} Resource object for the type or null of resource has not been found.
+   * @returns {Promise<ExistingResource|null>} Resource object for the type or null of resource has not been found.
    */
   getResource(uuid: string): Promise<ExistingResource|null> {
-    return this._getEntry<ExistingResource>(uuid, ResourceSpec);
+    return this._getEntry<ExistingResource>(uuid, this._resourceSpec);
   }
 
   /**
@@ -250,7 +251,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    */
   addResource(res: NewResource): Promise<ExistingResource> {
     let curDate = new Date();
-    return this._addEntry<NewResource, ExistingResource>({ ...res, addDate: curDate, lastModifyDate: curDate }, ResourceSpec);
+    return this._addEntry<NewResource, ExistingResource>({ ...res, addDate: curDate, lastModifyDate: curDate }, this._resourceSpec);
   }
 
   /**
@@ -263,7 +264,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     updData.lastModifyDate = new Date();
     delete updData.addDate;
 
-    return this._updateEntry(updData, ResourceSpec);
+    return this._updateEntry(updData, this._resourceSpec);
   }
 
   /**
@@ -272,7 +273,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
    * @returns {Promise<void>}
    */
   removeResource(resource: UpdateResource|string): Promise<void> {
-    return this._removeEntry(Database.getId(resource), ResourceSpec);
+    return this._removeEntry(Database.getId(resource), this._resourceSpec);
   }
 
   /**
@@ -311,7 +312,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       what = new CriterionOr(new CriterionEqual('title', what), new CriterionEqual('titleSort', what));
     }
 
-    let crit = this._evalCriterion(what, ResourceSpec);
+    let crit = this._evalCriterion(what, this._resourceSpec);
     let bound = crit.bound;
 
     let sortList: {
@@ -399,7 +400,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
             joinWhere.add(groupTypeField.column, groupTypeField.toDb(groupType));
             makeGroupSortJoin(joinWhere);
           } else {
-            order.push(LibraryDatabase._makeSort(null, sortProp.propName, sortProp.sortMode, ResourceSpec));
+            order.push(LibraryDatabase._makeSort(null, sortProp.propName, sortProp.sortMode, this._resourceSpec));
           }
         }
       }
@@ -410,7 +411,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
     // with equal author names (or whatever we sort by) to be sorted in some way.
     if (!order.length || !sortList.some(sortProp => sortProp.rawProp === 'titleSort')) {
       let mode = options && options.prefSortMode === SortMode.Desc ? SortMode.Desc : SortMode.Asc;
-      order.push(LibraryDatabase._makeSort(null, 'titleSort', mode, ResourceSpec));
+      order.push(LibraryDatabase._makeSort(null, 'titleSort', mode, this._resourceSpec));
     }
 
     // add joins if we need them
@@ -434,7 +435,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       query = `SELECT * FROM resources ${whereClause} ${orderClause} ${limits}`;
     }
 
-    return (await this.db.all(query, bound)).map(row => ResourceSpec.rowToEntry(row));
+    return (await this.db.all(query, bound)).map(row => this._resourceSpec.rowToEntry(row));
   }
 
   /**
@@ -977,6 +978,8 @@ export class LibraryDatabase extends DatabaseWithOptions {
    */
   async relatedGroups(resource: UpdateResource|string, groupType?: UpdateGroupType|string|Criterion|null,
                       options?: ListOptions): Promise<RelatedGroup[]> {
+    resource = Database.getId(resource);
+
     let crit: Criterion|null = null;
     if (typeof groupType === 'string') {
       let fetchedGroupType = this.getGroupType(groupType);
@@ -1120,27 +1123,77 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
   protected _groupSpec = new EntrySpec('groups', 'group', [
       new UuidFieldSpec(),
-      new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
-      new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
+      new GenericFieldSpec('title', 'title', '', PropValidators.String, PropValidators.String),
+      new GenericFieldSpec('titleSort', 'title_sort', '', PropValidators.String, PropValidators.String),
       new GroupTypeFieldSpec('groupType', 'type', this)
   ]);
 
   protected _groupRelationViewSpec = new EntrySpec('res_to_groups_view', 'related_group', [
       new UuidFieldSpec('uuid', 'linked_id'),
-      new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
-      new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
+      new GenericFieldSpec('title', 'title', '', PropValidators.String, PropValidators.String),
+      new GenericFieldSpec('titleSort', 'title_sort', '', PropValidators.String, PropValidators.String),
       new GroupTypeFieldSpec('groupType', 'type', this),
-      new GenericFieldSpec('groupIndex', 'group_index',
+      new GenericFieldSpec('groupIndex', 'group_index', -1,
           PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
           PropValidators.Number,
           (value: any): any => value == null ? -1 : value,
           (value: any): any => value < 0 ? null : value),
-      new GenericFieldSpec('relationTag', 'relation_tag',
+      new GenericFieldSpec('relationTag', 'relation_tag', '',
           PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
           PropValidators.String,
           (value: any): any => value == null ? '' : value,
           (value: any): any => value == null ? null : value)
   ]);
+
+  protected _resourceSpecFields = [
+    new UuidFieldSpec(),
+    new GenericFieldSpec('title', 'title', '', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('titleSort', 'title_sort', '', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('rating', 'rating', null,
+        PropValidators.OneOf(PropValidators.Empty,
+            PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
+        PropValidators.OneOf(PropValidators.Empty,
+            PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0))),
+    new DateFieldSpec('addDate', 'add_date'),
+    new DateFieldSpec('lastModifyDate', 'last_modify_date'),
+    new PublishDateSpec('publishDate', 'publish_date'),
+    new GenericFieldSpec('publisher', 'publisher', null,
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty)),
+    new GenericFieldSpec('desc', 'desc', null,
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
+        PropValidators.OneOf(PropValidators.String, PropValidators.Empty)),
+    new GenericFieldSpec('persons', 'am_persons', [], PropValidators.Any, PropValidators.String,
+        () => '', (value: string) => value.split('|').filter(x => !!x).map(person => {
+          let sepIndex = person.indexOf('@');
+          if (sepIndex < 0) {
+            throw new Error('Invalid database value');
+          }
+          let relation = strictParseInt(person.slice(sepIndex + 1));
+          if (relation == null) {
+            throw new Error('Invalid database value');
+          }
+          return {
+            name: person.slice(0, sepIndex),
+            relation: relation
+          };
+        })),
+    new GenericFieldSpec('groups', 'am_groups', [], PropValidators.Any, PropValidators.String,
+        () => '', (value: string) => {
+          return value.split('|').filter(x => !!x).map(group => {
+            let sepIndex = group.indexOf('@');
+            if (sepIndex < 0) {
+              throw new Error('Invalid database value');
+            }
+            return {
+              title: group.slice(0, sepIndex),
+              groupTypeName: this.getKnownGroupType(group.slice(sepIndex + 1)).name
+            };
+          });
+        })
+  ];
+
+  protected _resourceSpec = new EntrySpec('resources', 'resource', this._resourceSpecFields);
 
   protected async _loadGroupTypes(): Promise<void> {
     let types = await this.db.all<{ uuid: string, name: string, exclusive: number, ordered: number}>
@@ -1213,7 +1266,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
     await this.db.run(`INSERT INTO ${spec.table}(${intoClause}) VALUES(${valuesClause})`, bound);
 
-    return workaroundSpread(entry, entryUuid, spec.objectType);
+    return spec.extendWithDefaults(entry, entryUuid);
   }
 
   protected async _removeEntry<T>(uuid: string, spec: EntrySpec): Promise<void> {
@@ -1426,7 +1479,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
         let prop = arg.prop;
         if (spec.propSupported(prop)) {
           return (context.field = spec.prop(prop)).column;
-        } else if (spec === ResourceSpec) {
+        } else if (spec === this._resourceSpec) {
           let [propName, propExtra] = LibraryDatabase._splitProp(prop);
 
           switch (propName) {
@@ -1517,7 +1570,7 @@ export class LibraryDatabase extends DatabaseWithOptions {
       }
     }
 
-    if (spec === ResourceSpec) {
+    if (spec === this._resourceSpec) {
       // first replace pseudo-tables like 'authors' or 'tags' with persons and groups
       for (let j = 0; j < crit.args.length; ++j) {
         let arg = crit.args[j];
@@ -1579,6 +1632,8 @@ namespace PropValidators {
   export const Boolean = (value: any): boolean => typeof value == 'boolean' || ofClass(value, 'Boolean');
   export const Date = (value: any): boolean => ofClass(value, 'Date');
   export const Empty = (value: any): boolean => value === null || value === undefined;
+  export const None = () => false;
+  export const Any = () => true;
 
   export function OneOf(...validators: PropValidator[]): PropValidator {
     return function(value: any): boolean {
@@ -1661,11 +1716,27 @@ class EntrySpec {
     result.type = this.objectType;
     return result as T;
   }
+
+  extendWithDefaults<T extends AbstractDbObject>(entry: { [name: string]: any }, uuid: string): T {
+    let result: { [name: string]: any } = {};
+    let entryKeys = Object.keys(entry);
+    for (let field of this.fieldSpecs) {
+      if (entryKeys.indexOf(field.prop) >= 0) {
+        result[field.prop] = field.fromDb(field.toDb(entry[field.prop]));
+      } else if (field.defaultValue !== undefined) {
+        result[field.prop] = field.defaultValue;
+      }
+    }
+    result.uuid = uuid;
+    result.type = this.objectType;
+    return result as T;
+  }
 }
 
 interface FieldSpec {
   prop: string;
   column: string;
+  defaultValue: any;
 
   toDb(value: any): any;
   fromDb(value: any): any;
@@ -1675,12 +1746,13 @@ interface FieldSpec {
 }
 
 class GenericFieldSpec implements FieldSpec {
-  constructor(protected _prop: string, protected _column: string, protected _toDbValidator?: PropValidator,
+  constructor(protected _prop: string, protected _column: string, protected _defaultValue: any, protected _toDbValidator?: PropValidator,
               protected _fromDbValidator?: PropValidator, protected _toDb?: PropConvertor,
               protected _fromDb?: PropConvertor) { }
 
   get prop(): string { return this._prop; }
   get column(): string { return this._column; }
+  get defaultValue(): any { return this._defaultValue; }
 
   toDb(value: any): any {
     this.validateToDb(value);
@@ -1719,13 +1791,13 @@ class GenericFieldSpec implements FieldSpec {
 
 class UuidFieldSpec extends GenericFieldSpec {
   constructor(prop: string = 'uuid', column: string = 'uuid') {
-    super(prop, column, PropValidators.OneOf(PropValidators.String, PropValidators.Empty), PropValidators.String);
+    super(prop, column, undefined, PropValidators.OneOf(PropValidators.String, PropValidators.Empty), PropValidators.String);
   }
 }
 
 class DateFieldSpec extends GenericFieldSpec {
   constructor(prop: string, column: string) {
-    super(prop, column, PropValidators.Date, PropValidators.Number)
+    super(prop, column, undefined, PropValidators.Date, PropValidators.Number)
   }
 
   toDb(value: any): any {
@@ -1741,7 +1813,7 @@ class DateFieldSpec extends GenericFieldSpec {
 
 class PublishDateSpec extends GenericFieldSpec {
   constructor(prop: string, column: string) {
-    super(prop, column,
+    super(prop, column, null,
         PropValidators.OneOf(PropValidators.Date, PropValidators.String, PropValidators.Empty),
         PropValidators.OneOf(PropValidators.String, PropValidators.Empty));
   }
@@ -1766,7 +1838,7 @@ class PublishDateSpec extends GenericFieldSpec {
 
 class GroupTypeFieldSpec extends GenericFieldSpec {
   constructor(prop: string, column: string, protected _db: LibraryDatabase) {
-    super(prop, column);
+    super(prop, column, undefined);
   }
 
   validateToDb(value: any): void {
@@ -1793,50 +1865,30 @@ class GroupTypeFieldSpec extends GenericFieldSpec {
   }
 }
 
-const ResourceSpec = new EntrySpec('resources', 'resource', [
-    new UuidFieldSpec(),
-    new GenericFieldSpec('title', 'title', PropValidators.String, PropValidators.String),
-    new GenericFieldSpec('titleSort', 'title_sort', PropValidators.String, PropValidators.String),
-    new GenericFieldSpec('rating', 'rating',
-        PropValidators.OneOf(PropValidators.Empty,
-              PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0)),
-        PropValidators.OneOf(PropValidators.Empty,
-            PropValidators.Both(PropValidators.Number, (value: any): boolean => value <= 500 && value >= 0))),
-    new DateFieldSpec('addDate', 'add_date'),
-    new DateFieldSpec('lastModifyDate', 'last_modify_date'),
-    new PublishDateSpec('publishDate', 'publish_date'),
-    new GenericFieldSpec('publisher', 'publisher',
-        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
-        PropValidators.OneOf(PropValidators.String, PropValidators.Empty)),
-  new GenericFieldSpec('desc', 'desc',
-        PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
-        PropValidators.OneOf(PropValidators.String, PropValidators.Empty))
-]);
-
 const PersonSpec = new EntrySpec('persons', 'person', [
     new UuidFieldSpec(),
-    new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
-    new GenericFieldSpec('nameSort', 'name_sort', PropValidators.String, PropValidators.String)
+    new GenericFieldSpec('name', 'name', '', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('nameSort', 'name_sort', '', PropValidators.String, PropValidators.String)
 ]);
 
 const ObjectSpec = new EntrySpec('objects', 'related_object', [
-    new GenericFieldSpec('rowId', 'id', PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
+    new GenericFieldSpec('rowId', 'id', undefined, PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
         PropValidators.Number),
     new UuidFieldSpec('resourceUuid', 'res_id'),
     new UuidFieldSpec('uuid', 'uuid'),
-    new GenericFieldSpec('role', 'role', PropValidators.Number, PropValidators.Number),
-    new GenericFieldSpec('tag', 'tag', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('role', 'role', undefined, PropValidators.Number, PropValidators.Number),
+    new GenericFieldSpec('tag', 'tag', '', PropValidators.String, PropValidators.String),
 ], 'rowId');
 
 const GroupTypeSpec = new EntrySpec('group_types', 'group_type', [
     new UuidFieldSpec(),
-    new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
-    new GenericFieldSpec('exclusive', 'exclusive', PropValidators.Boolean, PropValidators.Boolean),
-    new GenericFieldSpec('ordered', 'ordered', PropValidators.Boolean, PropValidators.Boolean)
+    new GenericFieldSpec('name', 'name', '', PropValidators.String, PropValidators.String),
+    new GenericFieldSpec('exclusive', 'exclusive', false, PropValidators.Boolean, PropValidators.Boolean),
+    new GenericFieldSpec('ordered', 'ordered', false, PropValidators.Boolean, PropValidators.Boolean)
 ]);
 
 const PersonRelationSpec = new EntrySpec('res_to_persons', 'related_person', [
-    new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number)
+    new GenericFieldSpec('relation', 'relation', undefined, PropValidators.Number, PropValidators.Number)
 ], undefined, {
   res_id: 'resources',
   person_id: 'persons'
@@ -1844,18 +1896,18 @@ const PersonRelationSpec = new EntrySpec('res_to_persons', 'related_person', [
 
 const PersonRelationViewSpec = new EntrySpec('res_to_persons_view', 'related_person', [
   new UuidFieldSpec('uuid', 'linked_id'),
-  new GenericFieldSpec('relation', 'relation', PropValidators.Number, PropValidators.Number),
-  new GenericFieldSpec('name', 'name', PropValidators.String, PropValidators.String),
-  new GenericFieldSpec('nameSort', 'name_sort', PropValidators.String, PropValidators.String)
+  new GenericFieldSpec('relation', 'relation', undefined, PropValidators.Number, PropValidators.Number),
+  new GenericFieldSpec('name', 'name', '', PropValidators.String, PropValidators.String),
+  new GenericFieldSpec('nameSort', 'name_sort', '', PropValidators.String, PropValidators.String)
 ]);
 
 const GroupRelationSpec = new EntrySpec('res_to_groups', 'related_group', [
-  new GenericFieldSpec('groupIndex', 'group_index',
+  new GenericFieldSpec('groupIndex', 'group_index', -1,
       PropValidators.OneOf(PropValidators.Number, PropValidators.Empty),
       PropValidators.Number,
       (value: any): any => value == null ? -1 : value,
       (value: any): any => value < 0 ? null : value),
-  new GenericFieldSpec('relationTag', 'relation_tag',
+  new GenericFieldSpec('relationTag', 'relation_tag', '',
       PropValidators.OneOf(PropValidators.String, PropValidators.Empty),
       PropValidators.String,
       (value: any): any => value == null ? '' : value,

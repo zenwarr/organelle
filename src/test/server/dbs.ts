@@ -9,6 +9,8 @@ import * as uuid from 'uuid';
 import {dateToTimestamp} from "../../server/common";
 import * as sinon from 'sinon';
 import {KnownGroupTypes, ObjectRole, PersonRelation, Resource} from "../../common/db";
+import {createTestLib} from "./testlib";
+import * as testlib from './testlib';
 
 should();
 chai.use(chaiAsPromised);
@@ -1165,6 +1167,93 @@ describe('dbs', function() {
 
         let resources = await db.findResourcesByCriteria(new CriterionEqual('groups#title', 'The Title'));
         expect(resources.map(x => x.uuid)).to.be.deep.equal([MIST]);
+      });
+    });
+
+    describe("Resource amalgamation", function () {
+      let db: LibraryDatabase;
+
+      beforeEach(async function() {
+        db = await createTestLib(false);
+      });
+
+      function stringSortPredicate(x: string, y: string): number {
+        if (x < y) {
+          return -1;
+        } else if (x === y) {
+          return 0;
+        } else {
+          return 1;
+        }
+      }
+
+      function personSortPredicate(x: { name: string }, y: { name: string }): number {
+        return stringSortPredicate(x.name, y.name);
+      }
+
+      function groupSortPredicate(x: { title: string }, y: { title: string }): number {
+        return stringSortPredicate(x.title, y.title);
+      }
+
+      it("should return empty lists when no relations found", async function () {
+        let r = await db.getResource(testlib.ULYSSES);
+        expect(r).to.not.be.null;
+        if (r != null) {
+          expect(r.groups).to.be.deep.equal([]);
+          expect(r.persons).to.be.deep.equal([]);
+        }
+      });
+
+      it("should return empty lists for new resources", async function () {
+        let r = await db.addResource({
+          title: 'Some book',
+          titleSort: 'Some book'
+        });
+        expect(r.groups).to.be.deep.equal([]);
+        expect(r.persons).to.be.deep.equal([]);
+      });
+
+      it("should list linked persons and groups", async function () {
+        await db.addPersonRelation(testlib.ULYSSES, testlib.PERSON1, PersonRelation.Author);
+        await db.addPersonRelation(testlib.ULYSSES, testlib.PERSON2, PersonRelation.Editor);
+
+        await db.addTagToResource(testlib.ULYSSES, 'some tag');
+        await db.addTagToResource(testlib.ULYSSES, 'some tag2');
+
+        let r = await db.getResource(testlib.ULYSSES);
+        expect(r).not.to.be.null;
+        if (r != null) {
+          expect(r.persons.sort(personSortPredicate)).to.be.deep.equal([
+            { name: 'Person 1', relation: PersonRelation.Author },
+            { name: 'Person 2', relation: PersonRelation.Editor }
+          ]);
+          expect(r.groups.sort(groupSortPredicate)).to.be.deep.equal([
+            { title: 'some tag', groupTypeName: 'tags' },
+            { title: 'some tag2', groupTypeName: 'tags' }
+          ]);
+        }
+      });
+
+      it("should react on removing a relation", async function () {
+        await db.addPersonRelation(testlib.ULYSSES, testlib.PERSON1, PersonRelation.Author);
+        await db.addPersonRelation(testlib.ULYSSES, testlib.PERSON2, PersonRelation.Editor);
+
+        await db.addTagToResource(testlib.ULYSSES, 'some tag');
+        await db.addTagToResource(testlib.ULYSSES, 'some tag2');
+
+        await db.removeGroupRelations(testlib.ULYSSES, await db.tag('some tag'));
+
+        let r = await db.getResource(testlib.ULYSSES);
+        expect(r).not.to.be.null;
+        if (r != null) {
+          expect(r.persons.sort(personSortPredicate)).to.be.deep.equal([
+            { name: 'Person 1', relation: PersonRelation.Author },
+            { name: 'Person 2', relation: PersonRelation.Editor }
+          ]);
+          expect(r.groups.sort(groupSortPredicate)).to.be.deep.equal([
+            { title: 'some tag2', groupTypeName: 'tags' }
+          ]);
+        }
       });
     });
   });

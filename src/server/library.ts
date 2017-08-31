@@ -58,7 +58,7 @@ export class Library {
       return null;
     }
 
-    let rd = resource as FullResourceData;
+    let rd = (resource as any) as FullResourceData;
     rd.relatedGroups = await this._lib.relatedGroups(resource);
     rd.relatedPersons = await this._lib.relatedPersons(resource);
 

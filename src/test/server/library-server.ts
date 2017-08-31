@@ -115,15 +115,40 @@ describe("LibraryServer", function () {
             publisher: 'Viking Press',
             publishDate: '1980',
             desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters.",
-            relatedObjects: [],
-            relatedPersons: [{
+            persons: [{
               name: 'Stephen King',
-              nameSort: 'King, Stephen',
-              relation: PersonRelation.Author,
-              type: 'related_person',
-              uuid: testlib.KING
+              relation: PersonRelation.Author
             }],
-            relatedGroups: []
+            groups: [{
+              title: 'The Cool Series',
+              groupTypeName: 'series'
+            }],
+            relatedGroups: [
+              {
+                groupIndex: 1,
+                groupType: {
+                  exclusive: false,
+                  name: "series",
+                  ordered: true,
+                  uuid: KnownGroupTypes.Series
+                },
+                relationTag: "",
+                title: "The Cool Series",
+                titleSort: "Cool Series, The",
+                type: "related_group",
+                uuid: testlib.SERIES1
+              }
+            ],
+            relatedObjects: [],
+            relatedPersons: [
+              {
+                name: "Stephen King",
+                nameSort: "King, Stephen",
+                relation: 1,
+                type: "related_person",
+                uuid: testlib.KING
+              }
+            ]
           });
         })
         .end(done);
@@ -310,6 +335,30 @@ describe("LibraryServer", function () {
               publisher: 'Viking Press',
               publishDate: '1980',
               desc: "The Mist is a horror novella by the American author Stephen King, in which the small town of Bridgton, Maine is suddenly enveloped in an unnatural mist that conceals otherworldly monsters.",
+              persons: [{
+                name: 'Stephen King',
+                relation: PersonRelation.Author
+              }],
+              groups: [{
+                title: 'The Cool Series',
+                groupTypeName: 'series'
+              }],
+              relatedGroups: [
+                {
+                  groupIndex: 1,
+                  groupType: {
+                    exclusive: false,
+                    name: "series",
+                    ordered: true,
+                    uuid: KnownGroupTypes.Series
+                  },
+                  relationTag: "",
+                  title: "The Cool Series",
+                  titleSort: "Cool Series, The",
+                  type: "related_group",
+                  uuid: testlib.SERIES1
+                }
+              ],
               relatedObjects: [{
                 location: null,
                 role: ObjectRole.Format,
@@ -338,7 +387,6 @@ describe("LibraryServer", function () {
                 relation: PersonRelation.Author,
                 uuid: testlib.KING
               }],
-              relatedGroups: []
             });
           })
           .end(done);
