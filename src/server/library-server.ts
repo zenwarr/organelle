@@ -7,8 +7,8 @@ import {
   ExistingResource, FullResourceData, ObjectRole, objectRoleFromString, personRelationFromString, AbstractDbObject, RelatedObject
 } from "../common/db";
 import {
-  Criterion, ListOptions, CriterionOr, CriterionEqual, CriterionAnd,
-  CriterionHasRelationWith, SortMode
+  Criterion, ListOptions, CriterionEqual, CriterionAnd,
+  CriterionHasRelationWith, SortMode, CriterionOneOf
 } from "./library-db";
 import {PersonRelation} from "../common/db";
 import * as iassign from 'immutable-assign';
@@ -240,7 +240,7 @@ export class LibraryServer {
 
       let tags: string[] = params.tags.split(',').map(input => input.trim());
 
-      crit = new CriterionOr(...tags.map(tag => new CriterionEqual('tag', tag)));
+      crit = new CriterionOneOf('tag', ...tags);
     }
 
     if (params.roles != null) {
@@ -255,7 +255,7 @@ export class LibraryServer {
         throw new restifyErrors.BadRequestError('Invalid object role');
       }
 
-      let roleCrit = new CriterionOr(...roles.map(role => new CriterionEqual('role', role)));
+      let roleCrit = new CriterionOneOf('role', ...roles);
       crit = crit == null ? roleCrit : new CriterionAnd(crit, roleCrit);
     }
 
@@ -346,7 +346,7 @@ export class LibraryServer {
 
       let tagList = params.tags.split(',').map(tag => tag.toLowerCase().trim());
 
-      crit = new CriterionOr(...tagList.map(tag => new CriterionEqual('tag', tag)));
+      crit = new CriterionOneOf('tag', ...tagList);
     }
 
     let options = LibraryServer._listOptionsFromQuery(query);
@@ -385,7 +385,7 @@ export class LibraryServer {
     });
 
     let prop = prefix ? prefix + '#groupType' : 'groupType';
-    return new CriterionOr(...groupTypes.map(groupType => new CriterionEqual(prop, groupType)));
+    return new CriterionOneOf(prop, ...groupTypes);
   }
 
   protected _relationsCriterion(relationNames: string, prefix?: string): Criterion {
@@ -402,7 +402,7 @@ export class LibraryServer {
     });
 
     let prop = prefix ? prefix + '#relation' : 'relation';
-    return new CriterionOr(...relationList.map(relation => new CriterionEqual(prop, relation)));
+    return new CriterionOneOf(prop, ...relationList);
   }
 
   protected static _listOptionsFromQuery(query: any): ListOptions {

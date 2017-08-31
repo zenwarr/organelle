@@ -84,7 +84,8 @@ export enum Operator {
   Equal,
   And,
   Or,
-  HasRelationWith
+  HasRelationWith,
+  OneOf
 }
 
 export class Criterion {
@@ -119,6 +120,12 @@ export class CriterionOr extends Criterion {
 export class CriterionAnd extends Criterion {
   constructor(...args: Criterion[]) {
     super(Operator.And, ...args);
+  }
+}
+
+export class CriterionOneOf extends Criterion {
+  constructor(prop: string, ...values: any[]) {
+    super(Operator.OneOf, new CriterionProp(prop), ...values);
   }
 }
 
@@ -1537,6 +1544,15 @@ export class LibraryDatabase extends DatabaseWithOptions {
 
       case Operator.Or: {
         result.sql = crit.args.map((arg, i) => '(' + computeArg(arg, crit as Criterion, i) + ')').join(' OR ');
+      } break;
+
+      case Operator.OneOf: {
+        let left = computeArg(crit.args[0], crit, 0);
+        if (crit.args.length < 2) {
+          throw new Error('Too many arguments for OneOf operator');
+        }
+        let list = crit.args.slice(1).map((arg, i) => computeArg(arg, crit as Criterion, i)).join(', ');
+        result.sql = `${left} IN (${list})`;
       } break;
 
       case Operator.HasRelationWith: {
