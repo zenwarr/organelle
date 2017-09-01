@@ -34,6 +34,7 @@ body {
 
   &__shelf {
     width: 75%;
+    overflow: auto;
   }
 
   &__details {

@@ -1,6 +1,9 @@
 import * as React from "react";
 import {connect} from "react-redux";
-import {KnownGroupTypes, ObjectRole, FullResourceData, PersonRelation} from "../../../common/db";
+import {
+  KnownGroupTypes, ObjectRole, FullResourceData, PersonRelation, RelatedObject,
+  ResolvedRelatedObject
+} from "../../../common/db";
 import {AppState} from "../../store/store";
 import {loadResource, unloadResource} from "../../store/actions";
 
@@ -63,7 +66,23 @@ class Details extends React.Component<DetailsProps> {
       <p>Tags: {tags}</p>
 
       <p>{res.desc}</p>
+
+      {this.renderObjects(res.relatedObjects.filter(obj => obj.role === ObjectRole.Format))}
     </div>;
+  }
+
+  protected renderObjects(objects: ResolvedRelatedObject[]): JSX.Element|null {
+    if (!objects.length) {
+      return null;
+    } else {
+      return <div>
+        {objects.map(obj => {
+          return <div className={"details__format-btn-cont"}>
+            <a href={obj.location || "#"}>{obj.tag || '[Unknown format]'}</a>
+          </div>
+        })}
+      </div>
+    }
   }
 }
 

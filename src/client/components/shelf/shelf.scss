@@ -17,8 +17,16 @@
     }
   }
 
-  &__cell {
+  &__cell, &__head-item {
     border: 1px solid lightgray;
     padding: 0.4rem 0.5rem;
+  }
+
+  &__head-item, &__cell--index {
+    background: #eee;
+  }
+
+  &__cell--index {
+    text-align: right;
   }
 }
