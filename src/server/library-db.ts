@@ -1051,20 +1051,25 @@ export class LibraryDatabase extends DatabaseWithOptions {
   /**
    * Adds an object relation to a resource.
    * @param {UpdateResource | string} resource A resource to add relation to.
-   * @param {NewRelatedObject} obj An object to relate to.
-   * @returns {Promise<ExistingRelatedObject>} Created related object.
+   * @param uuid Uuid of an object to create relation to
+   * @param role Relation role
+   * @param tag Optional short text describing the relation.
    */
-  async addObjectRelation(resource: UpdateResource|string, obj: NewRelatedObject): Promise<ExistingRelatedObject> {
+  async addObjectRelation(resource: UpdateResource|string, uuid: string, role: ObjectRole, tag: string = ''): Promise<ExistingRelatedObject> {
     resource = Database.getId(resource);
-    let objectUuid = Database.validateId(obj.uuid);
+    let objectUuid = Database.validateId(uuid);
 
     let result = await this.db.run(`INSERT INTO objects(uuid, res_id, role, tag) VALUES(?, ?, ?, ?)`,
-        [ objectUuid, resource, ObjectSpec.prop('role').toDb(obj.role),
-          ObjectSpec.prop('tag').toDb(obj.tag) ]);
+        [ objectUuid, resource, ObjectSpec.prop('role').toDb(role),
+          ObjectSpec.prop('tag').toDb(tag) ]);
 
-    // return (await this.relatedObjects(resource, new CriterionEqual('rowId', result.lastID)))[0];
-
-    return { ...obj, rowId: result.lastID, resourceUuid: resource };
+    return {
+      rowId: result.lastID,
+      resourceUuid: resource,
+      uuid: uuid,
+      role: role,
+      tag: tag
+    };
   }
 
   /**

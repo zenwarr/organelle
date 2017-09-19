@@ -719,13 +719,7 @@ describe('dbs', function() {
       });
 
       it("should create object relations", async function () {
-        let obj = {
-          uuid: TEST_UUID,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        };
-
-        let relation = await db.addObjectRelation(MIST, obj);
+        let relation = await db.addObjectRelation(MIST, TEST_UUID, ObjectRole.Format, 'pdf');
 
         expect(relation.uuid).to.be.equal(TEST_UUID);
         expect(relation.role).to.be.equal(ObjectRole.Format);
@@ -744,26 +738,13 @@ describe('dbs', function() {
       });
 
       it("should not create duplicated object relations", async function () {
-        await db.addObjectRelation(MIST, {
-          uuid: TEST_UUID,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        });
+        await db.addObjectRelation(MIST, TEST_UUID, ObjectRole.Format, 'pdf');
 
-        return db.addObjectRelation(MIST, {
-          uuid: TEST_UUID,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        }).should.be.rejected;
+        return db.addObjectRelation(MIST, TEST_UUID, ObjectRole.Format, 'pdf').should.be.rejected;
       });
 
       it("should update object relations", async function () {
-        let relation = await db.addObjectRelation(MIST, {
-          uuid: TEST_UUID,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        });
-
+        let relation = await db.addObjectRelation(MIST, TEST_UUID, ObjectRole.Format, 'pdf');
         expect(relation.uuid).to.be.equal(TEST_UUID);
 
         relation.uuid = TEST_UUID2;
@@ -775,17 +756,8 @@ describe('dbs', function() {
       });
 
       it("should remove object relations", async function () {
-        let rel1 = await db.addObjectRelation(MIST, {
-          uuid: TEST_UUID,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        });
-
-        let rel2 = await db.addObjectRelation(MIST, {
-          uuid: TEST_UUID2,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        });
+        let rel1 = await db.addObjectRelation(MIST, TEST_UUID, ObjectRole.Format, 'pdf');
+        let rel2 = await db.addObjectRelation(MIST, TEST_UUID2, ObjectRole.Format, 'pdf');
 
         expect(await db.relatedObjects(MIST)).to.have.lengthOf(2);
 

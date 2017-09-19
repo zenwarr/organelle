@@ -24,8 +24,8 @@ export class StorageDatabase extends DatabaseWithOptions {
     await super.create();
 
     const SD_SCHEMA: string[] = [
-      "CREATE TABLE objects(uuid TEXT UNIQUE PRIMARY KEY, location TEXT NOT NULL)",
-      "CREATE TABLE covers(uuid TEXT UNIQUE PRIMARY KEY, location TEXT NOT NULL)",
+      "CREATE TABLE objects(uuid TEXT UNIQUE PRIMARY KEY, location TEXT NOT NULL, UNIQUE(uuid))",
+      "CREATE TABLE covers(uuid TEXT UNIQUE PRIMARY KEY, location TEXT NOT NULL, UNIQUE(uuid))",
     ];
 
     for (let query of SD_SCHEMA) {

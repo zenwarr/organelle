@@ -53,7 +53,9 @@
     "style-loader": "^0.18.2",
     "supertest": "^3.0.0",
     "ts-loader": "^2.3.4",
-    "typescript": "^2.5.1"
+    "ts-node": "^3.3.0",
+    "typescript": "^2.5.1",
+    "webpack": "^3.5.5"
   },
   "author": "zenwarr",
   "license": "UNLICENSED",
@@ -63,6 +65,7 @@
   },
   "scripts": {
     "build": "webpack --config ./webpack/webpack.config.js",
+    "watch": "webpack --watch --config ./webpack/webpack.config.js",
     "build-tests": "webpack --config ./webpack/tests.config.js",
     "test": "mocha ./dist/test --recursive",
     "build-and-test": "npm run build-tests && npm test",

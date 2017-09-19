@@ -236,26 +236,10 @@ describe("LibraryServer", function () {
 
     beforeEach(async function() {
       return Promise.all([
-        libDb.addObjectRelation(testlib.MIST, {
-          uuid: OBJ1,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        }),
-        libDb.addObjectRelation(testlib.MIST, {
-          uuid: OBJ2,
-          role: ObjectRole.Format,
-          tag: 'djvu'
-        }),
-        libDb.addObjectRelation(testlib.MIST, {
-          uuid: OBJ3,
-          role: ObjectRole.Format,
-          tag: 'pdf'
-        }),
-        libDb.addObjectRelation(testlib.MOCKINGBIRD, {
-          uuid: OBJ4,
-          role: ObjectRole.Format,
-          tag: 'fb2'
-        })
+        libDb.addObjectRelation(testlib.MIST, OBJ1, ObjectRole.Format, 'pdf'),
+        libDb.addObjectRelation(testlib.MIST, OBJ2, ObjectRole.Format, 'djvu'),
+        libDb.addObjectRelation(testlib.MIST, OBJ3, ObjectRole.Format, 'pdf'),
+        libDb.addObjectRelation(testlib.MOCKINGBIRD, OBJ4, ObjectRole.Format, 'fb2')
       ]);
     });
 

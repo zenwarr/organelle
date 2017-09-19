@@ -21,25 +21,17 @@ async function start(): Promise<void> {
 
   await storageDb.registerObject({
     uuid: 'some random uuid',
-    location: 'file://location.pdf'
+    location: 'file:///location.pdf'
   });
 
   await storageDb.registerObject({
     uuid: 'another random object',
-    location: 'file://location.fb2'
+    location: 'file:///some/dir/location.fb2'
   });
 
-  await libDb.addObjectRelation(testlib.MIST, {
-    uuid: 'some random uuid',
-    role: ObjectRole.Format,
-    tag: 'pdf'
-  });
+  await libDb.addObjectRelation(testlib.MIST, 'some random uuid', ObjectRole.Format, 'pdf');
 
-  await libDb.addObjectRelation(testlib.MIST, {
-    uuid: 'another random object',
-    role: ObjectRole.Format,
-    tag: 'fb2'
-  });
+  await libDb.addObjectRelation(testlib.MIST, 'another random object', ObjectRole.Format, 'fb2');
 
   return server.start();
 }

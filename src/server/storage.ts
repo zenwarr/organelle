@@ -4,6 +4,8 @@ import * as path from "path";
 import * as fs from 'fs-extra';
 import {Database} from "./db";
 import {UpdateRelatedObject} from "../common/db";
+import * as url from "url";
+import {pathMode, PathMode} from "./common";
 
 const DEF_FILE_TEMPLATE = '{author} - {title}';
 const DEF_DB_FILENAME = 'storage.db';
@@ -16,9 +18,54 @@ export const DEF_IMPORT_OPTIONS: ImportOptions = {
   overwrite: false
 };
 
+export namespace UrlHandler {
+  export function prepareForOuterWorld(url: string, host: string): string {
+    throw new Error("Method not implemented");
+  }
+
+  export function resolve(url: string, root: string): string {
+    throw new Error("Method not implemented");
+  }
+
+  export function normalize(url: string): string {
+    throw new Error("Method not implemented");
+  }
+
+  export function fromPath(filepath: string, host: string = ''): string {
+    if (pathMode(filepath) === PathMode.Relative) {
+      throw new Error('Failed to convert file path to URI: path must be absolute')
+    }
+
+    filepath = path.normalize(filepath);
+
+    filepath = path.normalize(filepath).split(/[/\\]/).map(x => encodeURIComponent(x)).join('/');
+    if (filepath.startsWith('/')) {
+      return 'file://' + host + filepath;
+    } else {
+      return 'file://' + host + '/' + filepath;
+    }
+  }
+
+  export function toPath(url: string): { host: string, path: string } {
+    throw new Error("Method not implemented");
+  }
+}
+
 export abstract class AbstractStorage {
   abstract get uuid(): string|null;
   abstract objectLocations(uuid: string|UpdateRelatedObject): IterableIterator<Promise<string>>;
+
+  static normalizeLocation(input: string, root: string): string {
+    let locationUrl = url.parse(input);
+    if (locationUrl.protocol === 'file:') {
+      // try to resolve relative path if file url points to localhost and it is relative
+      if ((!locationUrl.host || locationUrl.host === 'localhost') && locationUrl.pathname != null) {
+        let resolvedPath = path.resolve(root, locationUrl.pathname);
+        return 'file://' + resolvedPath;
+      }
+    }
+    return input;
+  }
 }
 
 export class FileSystemStorage extends AbstractStorage {
@@ -26,8 +73,7 @@ export class FileSystemStorage extends AbstractStorage {
     yield new Promise<string>((resolve, reject) => {
       this.db.getObject(Database.getId(uuid)).then(storageObject => {
         if (storageObject && storageObject.location) {
-          let objPath = path.resolve(storageObject, this.root);
-          resolve('file:///' + objPath);
+          resolve(AbstractStorage.normalizeLocation(storageObject.location, this.root));
         } else {
           reject(new Error('No object with given UUID found'));
         }
