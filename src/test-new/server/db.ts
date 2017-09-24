@@ -1,5 +1,6 @@
 import { expect } from 'chai';
-import {CollationNoCase, Database, TypeHint} from "../../new_server/db";
+import {CollationNoCase, Database, Model, TypeHint} from "../../new_server/db";
+import uuid = require("uuid");
 
 describe('Database', function() {
   describe('createSchema', function() {
@@ -78,16 +79,6 @@ describe('Database', function() {
           .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id))');
     });
 
-    it("should create a compound primary key", function () {
-      let fooModel = db.define('foo', {
-        id: { typeHint: TypeHint.Integer, primaryKey: true },
-        id2: { typeHint: TypeHint.Integer, primaryKey: true }
-      });
-
-      expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(id INTEGER, id2 INTEGER, PRIMARY KEY(id, id2))')
-    });
-
     it("should create one-to-many association", function () {
       let fooModel = db.define('foo', {
         fooId: { typeHint: TypeHint.Integer }
@@ -134,6 +125,103 @@ describe('Database', function() {
         value: { typeHint: TypeHint.Text }
       });
       await db.flushSchema();
+    });
+  });
+
+  describe("creating instances", function () {
+    let db: Database;
+    let fooModel: Model<any>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:');
+      fooModel = db.define('foo', {
+        id: { typeHint: TypeHint.Integer, primaryKey: true },
+        name: { typeHint: TypeHint.Text, unique: true, allowNull: false },
+        value: { typeHint: TypeHint.Text }
+      });
+    });
+
+    it("should create an instance", async function () {
+      await db.flushSchema();
+
+      let obj = fooModel.build({
+        name: 'option name',
+        value: 'option value'
+      });
+      expect(obj).to.have.property('name', 'option name');
+      expect(obj).to.have.property('value', 'option value');
+      expect(obj).to.have.property('id', null);
+      expect(obj.$fields).to.have.property('size', 3);
+      expect(obj.$db).to.be.equal(db);
+      expect(obj.$model).to.be.equal(fooModel);
+    });
+
+    it("should flush new instance to the database", async function () {
+      await db.flushSchema();
+
+      let obj = fooModel.build({
+        name: 'option name',
+        value: 'option value'
+      });
+      await obj.$sync();
+
+      expect(obj.$created).to.be.true;
+    });
+
+    it("should generate an uuid", async function () {
+      const GENERATED_UUID = uuid.v4();
+
+      fooModel.addField('uuid', {
+        typeHint: TypeHint.Text,
+        newGenerate: given => given == null ? GENERATED_UUID : given
+      });
+
+      await db.flushSchema();
+
+      let obj = fooModel.build({
+        name: '',
+        value: ''
+      });
+      expect(obj).to.have.property('uuid', GENERATED_UUID);
+      await obj.$sync();
+    });
+  });
+
+  describe("updating instances", function () {
+    let db: Database;
+    let fooModel: Model<any>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:');
+      fooModel = db.define('foo', {
+        name: { typeHint: TypeHint.Text, unique: true, allowNull: false },
+        value: { typeHint: TypeHint.Text }
+      });
+    });
+
+    it("should update instance without errors", async function () {
+      await db.flushSchema();
+
+      let inst1 = fooModel.build({
+        name: 'some name',
+        value: 'some value'
+      });
+      await inst1.$sync();
+
+      inst1.$fields.set('name', 'another name');
+      await inst1.$sync();
+    });
+
+    it("should remove instance without errors", async function () {
+      await db.flushSchema();
+
+      let inst = fooModel.build({
+        name: 'some name',
+        value: 'some value'
+      });
+      await inst.$sync();
+
+      await inst.$remove();
     });
   });
 });
