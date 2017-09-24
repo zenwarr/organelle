@@ -1,12 +1,20 @@
 import * as sqlite from 'sqlite';
+import * as sqlite3 from 'sqlite3';
 
 export class Model<T> {
-  constructor(db: Database, name: string, spec: ModelSpec) {
+  constructor(db: Database, name: string, spec: ModelSpec, options?: ModelOptions) {
     this._db = db;
     this._name = name;
 
     for (let fieldName of Object.keys(spec)) {
       this.addField(fieldName, spec[fieldName]);
+    }
+
+    if (options && options.createTimestamp) {
+      this.addField('createdAt', { typeHint: TypeHint.Date });
+    }
+    if (options && options.updateTimestamp) {
+      this.addField('updatedAt', { typeHint: TypeHint.Date });
     }
   }
 
@@ -58,23 +66,50 @@ export class Model<T> {
   }
 
   oneToOne(otherModel: Model<any>, relationField: string, otherRelationField?: string): Model<T> {
-    if (this.getFieldSpec(relationField) == null) {
-      this.addField(relationField, { typeHint: TypeHint.Integer });
-    }
-    if (otherRelationField == null) {
-      // try to find a primary key for the other model and link to it
-      let pks = otherModel.getPrimaryKeysNames();
-      if (!pks.length) {
-        throw new Error('Cannot find a primary key to link to model ' + otherModel.name);
+    return this._oneOrManyToOne(otherModel, relationField, otherRelationField, true);
+  }
+
+  manyToOne(otherModel: Model<any>, relationField: string, otherRelationField?: string): Model<T> {
+    return this._oneOrManyToOne(otherModel, relationField, otherRelationField, false);
+  }
+
+  oneToMany(otherModel: Model<any>, otherRelationField: string, relationField?: string): Model<T> {
+    return otherModel.oneToOne(this, otherRelationField, relationField);
+  }
+
+  manyToMany(otherModel: Model<any>, relationModel: Model<any>|string, relationField: string, otherRelationField: string): Model<T> {
+    if (typeof relationModel === 'string') {
+      let existingModel = this._db.getModel(relationModel);
+      if (existingModel == null) {
+        relationModel = this._db.define(relationModel, { });
+      } else {
+        relationModel = existingModel;
       }
-      otherRelationField = pks.join(', ');
     }
-    this.addConstraint(`FOREIGN KEY (${relationField}) REFERENCES ${otherModel.name}(${otherRelationField})`);
+
+    relationModel.updateField(relationField, { typeHint: TypeHint.Integer });
+    relationModel.updateField(otherRelationField, { typeHint: TypeHint.Integer });
+    relationModel.addForeignKeyConstraint(relationField, this, this.getPrimaryKeysNames().join(', '));
+    relationModel.addForeignKeyConstraint(otherRelationField, otherModel, otherModel.getPrimaryKeysNames().join(', '));
+    relationModel.addUniqueConstraint([relationField, otherRelationField]);
+
     return this;
   }
 
   addConstraint(constr: string): Model<T> {
     this._constraints.push(constr);
+    return this;
+  }
+
+  addForeignKeyConstraint(ownKey: string, foreignModel: Model<any>|string, foreignKeys: string): Model<T> {
+    let modelName = typeof foreignModel === 'string' ? foreignModel : foreignModel.name;
+    this.addConstraint(`FOREIGN KEY (${ownKey}) REFERENCES ${modelName}(${foreignKeys})`);
+    return this;
+  }
+
+  addUniqueConstraint(fields: (string|FieldSpecWrapper)[]): Model<T> {
+    let keys: string[] = fields.map(x => typeof x === 'string' ? x : x.fieldName);
+    this.addConstraint(`UNIQUE(${keys.join(', ')})`);
     return this;
   }
 
@@ -84,6 +119,27 @@ export class Model<T> {
   protected _spec: { [name: string]: FieldSpecWrapper } = {};
   protected _name: string;
   protected _constraints: string[] = [];
+
+  protected _oneOrManyToOne(otherModel: Model<any>, relationField: string, otherRelationField: string|undefined,
+                            unique: boolean) {
+    if (this.getFieldSpec(relationField) == null) {
+      this.addField(relationField, { typeHint: TypeHint.Integer, unique });
+    } else {
+      this.updateField(relationField, { unique });
+    }
+
+    if (otherRelationField == null) {
+      // try to find a primary key for the other model and link to it
+      let pks = otherModel.getPrimaryKeysNames();
+      if (!pks.length) {
+        throw new Error('Cannot find a primary key to link to model ' + otherModel.name);
+      }
+      otherRelationField = pks.join(', ');
+    }
+
+    this.addForeignKeyConstraint(relationField, otherModel, otherRelationField);
+    return this;
+  }
 }
 
 export interface ModelSpec {
@@ -117,7 +173,7 @@ export type FieldDeserializer = (value: any) => any;
 
 export const CollationNoCase = 'NOCASE';
 
-class FieldSpecWrapper {
+export class FieldSpecWrapper {
   constructor(public fieldName: string, public fieldSpec: FieldSpec) {
 
   }
@@ -137,11 +193,11 @@ class FieldSpecWrapper {
   }
 
   convertFromDatabaseForm(value: any): any {
-    return value;
+    return this.fieldSpec.deserialize ? this.fieldSpec.deserialize(value) : value;
   }
 }
 
-namespace FieldValidators {
+export namespace FieldValidators {
   function ofClass(value: any, className: string): boolean {
     return Object.prototype.toString.call(value) === '[object ' + className + ']';
   }
@@ -173,11 +229,25 @@ namespace FieldValidators {
   }
 }
 
+export interface ModelOptions {
+  createTimestamp: boolean;
+  updateTimestamp: boolean;
+}
+
+export interface DatabaseOpenOptions {
+  shouldCreate: boolean;
+}
+
 export class Database {
-  define<T>(modelName: string, modelSpec: { [name: string]: FieldSpec }): Model<T> {
-    let model = new Model<T>(this, modelName, modelSpec);
+  define<T>(modelName: string, modelSpec: { [name: string]: FieldSpec }, modelOptions?: ModelOptions): Model<T> {
+    let model = new Model<T>(this, modelName, modelSpec, modelOptions);
     this._models.push(model);
     return model;
+  }
+
+  getModel<T>(modelName: string): Model<T>|null {
+    let foundModel = this._models.find(model => model.name === modelName);
+    return foundModel == null ? null : foundModel;
   }
 
   createSchema(): string {
@@ -231,10 +301,27 @@ export class Database {
     return schemaTables.join('; ');
   }
 
+  async flushSchema(): Promise<void> {
+    await this._db.exec(this.createSchema());
+  }
+
+  static async open(filename: string, options?: DatabaseOpenOptions): Promise<Database> {
+    let db = await sqlite.open(filename, {
+      mode: sqlite3.OPEN_READWRITE | (options && options.shouldCreate === false ? 0 : sqlite3.OPEN_CREATE),
+      promise: Promise
+    });
+    await db.run('PRAGMA foreign_keys = TRUE');
+    return new Database(db);
+  }
+
   /** Protected area **/
 
   protected _db: sqlite.Database;
   protected _models: Model<any>[] = [];
+
+  protected constructor(db: sqlite.Database) {
+    this._db = db;
+  }
 
   protected async _tuneConnection() {
     await this._db.run('PRAGMA foreign_keys = TRUE');
