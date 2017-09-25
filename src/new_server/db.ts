@@ -1,6 +1,8 @@
 import * as sqlite from 'sqlite';
 import * as sqlite3 from 'sqlite3';
 
+const ROWID = 'rowid';
+
 /**
  * Base class for all ORM instances
  */
@@ -90,6 +92,8 @@ export class DatabaseInstance<T> {
   };
 }
 
+type Instance<T> = T & DatabaseInstance<T>;
+
 /**
  * ORM model class.
  */
@@ -139,6 +143,12 @@ export class Model<T> {
    * @returns {{[p: string]: FieldSpecWrapper}} Map of field names to field specification wrappers.
    */
   get spec(): { [name: string]: FieldSpecWrapper } { return this._spec; }
+
+  /**
+   * List of all fields registered for this model.
+   * @returns {FieldSpecWrapper[]} List of fields
+   */
+  get fields(): FieldSpecWrapper[] { return Object.values(this._spec) as FieldSpecWrapper[] }
 
   /**
    * Model name
@@ -197,8 +207,8 @@ export class Model<T> {
    * @returns {string|null} Primary key field name
    */
   getPrimaryKeyName(): string {
-    let primary = (Object.values(this._spec) as FieldSpecWrapper[]).find(fsw => fsw.fieldSpec.primaryKey === true);
-    return primary == null ? 'rowid' : primary.fieldName;
+    let primary = this.fields.find(fsw => fsw.fieldSpec.primaryKey === true);
+    return primary == null ? ROWID : primary.fieldName;
   }
 
   /**
@@ -338,10 +348,10 @@ export class Model<T> {
    * Does not store anything into the database.
    * You should call $create on the created instance to write changes.
    * @param {{[name: string]: any}} template Properties of the new instance.
-   * @returns {T & DatabaseInstance<T>} New instance.
+   * @returns {Instance<T>} New instance.
    * This instance has all properties that correspond to the fields of the model, plus DatabaseInstance methods that start with $.
    */
-  build(template: { [name: string]: any }): T & DatabaseInstance<T> {
+  build(template: { [name: string]: any }): Instance<T> {
     let inst = new DatabaseInstance(this._db, this);
     for (let field of Object.values(this._spec)) {
       let given = template[field.fieldName];
@@ -354,31 +364,115 @@ export class Model<T> {
       inst.$fields.set(field.fieldName, given);
     }
 
-    return new Proxy(inst, {
-      get: function(target: DatabaseInstance<T>, name: string, receiver: any): any {
-        if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
-          return Reflect.get(target, name, target);
-        } else if (target.$fields.has(name)) {
-          return target.$fields.get(name);
-        } else {
-          throw new Error(`There is no field named [${name}]`);
-        }
-      },
-      set: function(target: DatabaseInstance<T>, name: string, value: any, receiver: any): boolean {
-        if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
-          return Reflect.set(target, name, value, target);
-        } else {
-          debugger;
-          console.log(`Creating field with name ${name} and value ${value}`);
-          target.$fields.set(name, value);
-          return true;
-        }
-      },
-      has: function(target: DatabaseInstance<T>, prop: string): boolean {
-        return ((typeof prop !== 'string' || prop.startsWith('$')) && Reflect.has(target, prop)) ||
-            target.$fields.has(prop);
+    return this._makeInstance(inst);
+  }
+
+  /**
+   * Creates an instance from database query result.
+   * Should not by used by end user.
+   * @param {{[p: string]: any}} sqlResult Sql result
+   * @returns {Instance<T>} Created instance
+   */
+  buildFromDatabaseResult(sqlResult: { [name: string]: any }): Instance<T> {
+    let result = new DatabaseInstance(this._db, this);
+    for (let field of this.fields) {
+      let value: any;
+
+      if (sqlResult.hasOwnProperty(field.fieldName)) {
+        result.$fields.set(field.fieldName, value = field.convertFromDatabaseForm(sqlResult[field.fieldName]));
+      } else {
+        throw new Error(`No database value for field [${field.fieldName}] of model [${this.name}]`);
       }
-    }) as T & DatabaseInstance<T>;
+
+      if (field.fieldSpec.primaryKey) {
+        result.$rowId = value;
+      }
+    }
+
+    if (result.$rowId == null) {
+      if (sqlResult[ROWID] == null) {
+        throw new Error(`No rowid database value for an instance of model [${this.name}]`);
+      } else {
+        let rowid = sqlResult[ROWID];
+        if (typeof rowid !== 'number') {
+          throw new Error(`Invalid rowid value type for an instance of model [${this.name}]`);
+        }
+        result.$rowId = rowid;
+      }
+    }
+
+    return this._makeInstance(result);
+  }
+
+  /**
+   * Search instances by a criteria.
+   * @param {FindOptions} options Search criteria and options
+   * @returns {Promise<FindResult<T>>} Result set
+   */
+  async find(options?: FindOptions): Promise<FindResult<T>> {
+    return this._db.find(this, options || {});
+  }
+
+  /**
+   * Returns a first instance matching a query.
+   * If no instances matching criteria found, null is returned.
+   * @param {FindOptions} options Search criteria and options
+   * @returns {Promise<Instance<T>>} Result or null if no results.
+   */
+  async findOne(options?: FindOptions): Promise<Instance<T> | null> {
+    let results = await this._db.find(this, Object.assign({}, options, {
+      limit: 1,
+      fetchTotalCount: false
+    } as FindOptions));
+    return results.items.length > 0 ? results.items[0] : null;
+  }
+
+  /**
+   * Just list findOne, but throws an error when no instances found.
+   * @param {FindOptions} options Search criteria and options
+   * @returns {Promise<Instance<T>>} Result
+   */
+  async findOneChecked(options?: FindOptions): Promise<Instance<T>> {
+    let r = await this.findOne(options);
+    if (r == null) {
+      throw new Error('No instance matching criteria found');
+    }
+    return r;
+  }
+
+  /**
+   * Finds and instance with given primary key.
+   * @param pkValue Primary key value
+   * @returns {Promise<Instance<T>>} Instance or null if no instance found
+   */
+  async findByPK(pkValue: any): Promise<(Instance<T>) | null> {
+    let results = await this._db.find(this, {
+      where: {
+        [this.getPrimaryKeyName()]: pkValue
+      }
+    });
+    return results.items.length > 0 ? results.items[0] : null;
+  }
+
+  /**
+   * Just like findByPK, but throws and error instead of returning null.
+   * @param pkValue Primary key value
+   * @returns {Promise<Instance<T>>} Instance with given primary key
+   */
+  async findByPKChecked(pkValue: any): Promise<Instance<T>> {
+    let r = await this.findByPK(pkValue);
+    if (r == null) {
+      throw new Error('No instance with given primary key found');
+    }
+    return r;
+  }
+
+  /**
+   * Returns number of instances of this model in the database.
+   * @returns {Promise<number>} Number of instances
+   */
+  async count(): Promise<number> {
+    return this._db.count(this);
   }
 
   /** Protected area **/
@@ -404,6 +498,34 @@ export class Model<T> {
 
     this.addForeignKeyConstraint(relationField, otherModel, otherRelationField);
     return this;
+  }
+
+  protected _makeInstance(inst: DatabaseInstance<T>): Instance<T> {
+    return new Proxy(inst, {
+      get: function(target: DatabaseInstance<T>, name: string, receiver: any): any {
+        if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
+          return Reflect.get(target, name, target);
+        } else if (target.$fields.has(name)) {
+          return target.$fields.get(name);
+        } else {
+          throw new Error(`There is no field named [${name}]`);
+        }
+      },
+      set: function(target: DatabaseInstance<T>, name: string, value: any, receiver: any): boolean {
+        if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
+          return Reflect.set(target, name, value, target);
+        } else {
+          debugger;
+          console.log(`Creating field with name ${name} and value ${value}`);
+          target.$fields.set(name, value);
+          return true;
+        }
+      },
+      has: function(target: DatabaseInstance<T>, prop: string): boolean {
+        return ((typeof prop !== 'string' || prop.startsWith('$')) && Reflect.has(target, prop)) ||
+            target.$fields.has(prop);
+      }
+    }) as Instance<T>;
   }
 }
 
@@ -572,6 +694,37 @@ export interface DatabaseOpenOptions {
 }
 
 /**
+ * Search criteria and options
+ */
+export interface FindOptions {
+  /**
+   * Search criteria
+   */
+  where?: {
+    [name: string]: any
+  },
+  limit?: number;
+  offset?: number;
+
+  /**
+   * Whether we should get a total count of results (count of results without LIMIT).
+   */
+  fetchTotalCount?: boolean;
+}
+
+export interface FindResult<T> {
+  totalCount?: number|null;
+  items: (Instance<T>)[];
+}
+
+interface QueryOptions {
+  where: string[];
+  constraints: string[];
+  bound: any[];
+  joins: string[];
+}
+
+/**
  * Base ORM class.
  */
 export class Database {
@@ -732,6 +885,47 @@ export class Database {
     await this._db.run(sql, values);
   }
 
+  async find<T>(model: Model<T>, options: FindOptions): Promise<FindResult<T>> {
+    let q = this._findOptionsToQuery(model, options);
+
+    let columns: string[] = model.fields.map(field => field.fieldName);
+
+    // if no primary key defined explicitly, we should select rowid column too
+    if (model.fields.find(x => x.fieldSpec.primaryKey === true) == null) {
+      columns.push(ROWID);
+    }
+
+    let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
+    let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${q.joins.join(' ')} ${whereClause} ${q.constraints.join(' ')}`;
+    this._logQuery(sql, q.bound);
+    let sqlResults: any[] = await this._db.all(sql, q.bound);
+
+    let result: FindResult<T> = {
+      totalCount: null,
+      items: []
+    };
+    for (let sqlResult of sqlResults) {
+      result.items.push(model.buildFromDatabaseResult(sqlResult));
+    }
+
+    if (options.fetchTotalCount === true) {
+      // we should run an extra query to get total number of rows without taking limit and offset into account
+      let countConstraints = q.constraints.filter(constr => !constr.startsWith('LIMIT')).join(' ');
+      let countSql = `SELECT COUNT(*) FROM ${model.name} ${q.joins.join(' ')} ${whereClause} ${countConstraints}`;
+      this._logQuery(countSql, q.bound);
+      let countResult = await this._db.get(countSql, q.bound);
+      result.totalCount = countResult['COUNT(*)'] as number;
+    }
+
+    return result;
+  }
+
+  async count(model: Model<any>): Promise<number> {
+    let sql = `SELECT COUNT(*) FROM ${model.name}`;
+    this._logQuery(sql);
+    return (await this._db.get(sql))['COUNT(*)'] as number;
+  }
+
   /**
    * Opens of creates a new sqlite database.
    * @param {string} filename Path to sqlite database file
@@ -762,7 +956,36 @@ export class Database {
     await this._db.run('PRAGMA foreign_keys = TRUE');
   }
 
-  protected _logQuery(query: string, bound: any[]): void {
-    console.log('Q:', query, bound);
+  protected _logQuery(query: string, bound?: any[]): void {
+    console.log('Q:', query, bound == null ? '' : bound);
+  }
+
+  protected _findOptionsToQuery<T>(model: Model<T>, options: FindOptions): QueryOptions {
+    let q: QueryOptions = {
+      where: [],
+      constraints: [],
+      joins: [],
+      bound: []
+    };
+
+    if (options.where != null) {
+      for (let whereKey of Object.keys(options.where)) {
+        if (whereKey.startsWith('$')) {
+          // special key
+        } else {
+          q.where.push(whereKey + ' = ?');
+          q.bound.push(options.where[whereKey]);
+        }
+      }
+    }
+
+    if (options.limit != null) {
+      q.constraints.push('LIMIT ' + options.limit);
+    }
+    if (options.offset != null) {
+      q.constraints.push('OFFSET ' + options.offset);
+    }
+
+    return q;
   }
 }

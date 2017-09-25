@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import {CollationNoCase, Database, Model, TypeHint} from "../../new_server/db";
 import uuid = require("uuid");
+import {EAFNOSUPPORT} from "constants";
 
 describe('Database', function() {
   describe('createSchema', function() {
@@ -222,6 +223,74 @@ describe('Database', function() {
       await inst.$sync();
 
       await inst.$remove();
+    });
+  });
+
+  describe("searching", function () {
+    let db: Database;
+    let fooModel: Model<any>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:');
+      fooModel = db.define('foo', {
+        name: { typeHint: TypeHint.Text, unique: true, allowNull: false },
+        value: { typeHint: TypeHint.Text }
+      });
+      await db.flushSchema();
+
+      await fooModel.build({ name: 'name1', value: 'value1' }).$sync();
+      await fooModel.build({ name: 'name2', value: 'value2' }).$sync();
+      await fooModel.build({ name: 'name3', value: 'value3' }).$sync();
+      await fooModel.build({ name: 'name4', value: 'value4' }).$sync();
+      await fooModel.build({ name: 'name5', value: 'value5' }).$sync();
+    });
+
+    it("should find instances by a simple query", async function () {
+      let result = await fooModel.find({
+        where: {
+          name: 'name1'
+        }
+      });
+
+      expect(result.totalCount).to.be.equal(null);
+      expect(result.items).to.have.lengthOf(1);
+      expect(result.items[0]).to.have.property('name', 'name1');
+      expect(result.items[0]).to.have.property('value', 'value1');
+    });
+
+    it("should find all instances", async function () {
+      let result = await fooModel.find();
+
+      expect(result.items).to.have.lengthOf(5);
+    });
+
+    it("should fetch total count with where clause", async function () {
+      let result = await fooModel.find({
+        where: {
+          name: 'name1'
+        },
+        fetchTotalCount: true
+      });
+
+      expect(result.totalCount).to.be.equal(1);
+    });
+
+    it("should get total count from model", async function () {
+      let count = await fooModel.count();
+      expect(count).to.be.equal(5);
+    });
+
+    it("should find instances by two conditions", async function () {
+      let result = await fooModel.find({
+        where: {
+          name: 'name1',
+          value: 'value1'
+        }
+      });
+
+      expect(result.items).to.have.lengthOf(1);
+      expect(result.items[0]).to.have.property('name', 'name1');
+      expect(result.items[0]).to.have.property('value', 'value1');
     });
   });
 });
