@@ -2,7 +2,6 @@
 .git
 dist
 node_modules
-package-lock.json
 *.map
 todo.md
 tmp
