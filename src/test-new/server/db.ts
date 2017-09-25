@@ -22,6 +22,10 @@ describe('Database', function() {
       expect(db.createSchema()).to.be.equal('CREATE TABLE foo(id INTEGER PRIMARY KEY)');
     });
 
+    it("should throw when model name is invalid", function () {
+      expect(() => db.define('$foo', {})).to.throw();
+    });
+
     it("should create a schema with two columns", function () {
       db.define('foo', {
         id: { typeHint: TypeHint.Integer, primaryKey: true },
@@ -38,6 +42,13 @@ describe('Database', function() {
       fooModel.addField('someColumn', { typeHint: TypeHint.Text });
       expect(db.createSchema())
           .to.be.equal('CREATE TABLE foo(id INTEGER PRIMARY KEY, someColumn TEXT)');
+    });
+
+    it("should throw when field name is invalid", function () {
+      let fooModel = db.define('foo', {
+        id: { typeHint: TypeHint.Integer, primaryKey: true }
+      });
+      expect(() => fooModel.addField('_someColumn', { typeHint: TypeHint.Text })).to.throw();
     });
 
     it("should throw on adding field with already reserved name", function () {

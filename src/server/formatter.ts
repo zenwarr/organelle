@@ -165,7 +165,10 @@
  * ```
  */
 
-import {propercase, strictParseInt, strictParseFloat} from "../common/helpers";
+import {
+  propercase, strictParseInt, strictParseFloat, isAlphaCode, isWhitespaceCode,
+  isDigitCode
+} from "../common/helpers";
 import * as moment from 'moment';
 import * as numeral from 'numeral';
 
@@ -601,19 +604,6 @@ const CHAR_DOUBLE_QUOTE = '"'.charCodeAt(0);
 const CHAR_BACKSLASH = '\\'.charCodeAt(0);
 const CHAR_PLUS = '+'.charCodeAt(0);
 const CHAR_MINUS = '-'.charCodeAt(0);
-const WHITESPACE_CODES: number[] = ' \t\n\r\v\f\u00A0\u2028\u2029'.split('').map(x => x.charCodeAt(0));
-
-function isWhitespaceCode(ch: number): boolean {
-  return WHITESPACE_CODES.indexOf(ch) >= 0;
-}
-
-function isAlphaCode(ch: number): boolean {
-  return (ch >= 'a'.charCodeAt(0) && ch <= 'z'.charCodeAt(0)) || (ch >= 'A'.charCodeAt(0) && ch <= 'Z'.charCodeAt(0));
-}
-
-function isDigitCode(ch: number): boolean {
-  return ch >= '0'.charCodeAt(0) && ch <= '9'.charCodeAt(0);
-}
 
 const NAME_SPECIAL_CHARS = '_#.';
 function isNameCode(ch: number): boolean {

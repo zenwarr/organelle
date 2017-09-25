@@ -1,5 +1,5 @@
 import * as sqlite from 'better-sqlite3';
-import {mapFromObject} from "../common/helpers";
+import {isAlphaCode, isDigitCode, mapFromObject} from "../common/helpers";
 
 const ROWID = 'rowid';
 
@@ -218,6 +218,9 @@ export class Model<T> {
    * @returns {Model<T>} This model
    */
   addField(fieldName: string, fieldSpec: FieldSpec): Model<T> {
+    if (!isValidName(fieldName)) {
+      throw new Error(`Cannot define field: [${fieldName}] is invalid name for a field`);
+    }
     if (this._spec[fieldName] != null) {
       throw new Error(`Field with same name [${fieldName}] already exists`);
     }
@@ -766,6 +769,20 @@ interface QueryOptions {
   joins: string[];
 }
 
+const CHAR_UNDERSCORE = '_'.charCodeAt(0);
+function isValidName(name: string): boolean {
+  if (name.length === 0 || !isAlphaCode(name.charCodeAt(0))) {
+    return false;
+  }
+  for (let j = 1; j < name.length; ++j) {
+    let ch = name.charCodeAt(j);
+    if (!(isAlphaCode(ch) || isDigitCode(ch) || ch === CHAR_UNDERSCORE)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Base ORM class.
  */
@@ -778,6 +795,9 @@ export class Database {
    * @returns {Model<T>} Newly created model
    */
   define<T>(modelName: string, modelSpec: { [name: string]: FieldSpec }, modelOptions?: ModelOptions): Model<T> {
+    if (!isValidName(modelName)) {
+      throw new Error(`Cannot define model: [${modelName}] is invalid name for a model`);
+    }
     let model = new Model<T>(this, modelName, modelSpec, modelOptions);
     this._models.push(model);
     return model;
