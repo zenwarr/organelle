@@ -1,5 +1,4 @@
-import * as sqlite from 'sqlite';
-import * as sqlite3 from 'sqlite3';
+import * as sqlite from 'better-sqlite3';
 
 const ROWID = 'rowid';
 
@@ -690,7 +689,8 @@ export interface ModelOptions {
 }
 
 export interface DatabaseOpenOptions {
-  shouldCreate: boolean;
+  shouldCreate?: boolean;
+  inMemory?: boolean;
 }
 
 /**
@@ -834,15 +834,15 @@ export class Database {
 
     let sql = `INSERT INTO ${inst.$model.name} (${columns}) VALUES (${valuesPlaceholders})`;
     this._logQuery(sql, values);
-    let stmt = await this._db.run(sql, values);
+    let runResult = this._db.prepare(sql).run(values);
 
     // if we have a field for a primary key, but it is not specified explicitly, we should set it now
     let pkName = inst.$model.getPrimaryKeyName();
     if (inst.$fields.has(pkName)) {
-      inst.$fields.set(pkName, stmt.lastID);
+      inst.$fields.set(pkName, runResult.lastInsertROWID);
     }
 
-    inst.$rowId = stmt.lastID;
+    inst.$rowId = runResult.lastInsertROWID;
   }
 
   async updateInstance(inst: DatabaseInstance<any>, updateFields?: string[]): Promise<void> {
@@ -868,7 +868,8 @@ export class Database {
 
     let sql = `UPDATE ${inst.$model.name} SET ${placeholders} WHERE ${pk} = ?`;
     this._logQuery(sql, values);
-    await this._db.run(sql, values);
+
+    this._db.prepare(sql).run(values);
   }
 
   async removeInstance(inst: DatabaseInstance<any>): Promise<void> {
@@ -882,7 +883,7 @@ export class Database {
     let values = [inst.$rowId];
 
     this._logQuery(sql, values);
-    await this._db.run(sql, values);
+    this._db.prepare(sql).run(values);
   }
 
   async find<T>(model: Model<T>, options: FindOptions): Promise<FindResult<T>> {
@@ -898,7 +899,7 @@ export class Database {
     let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
     let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${q.joins.join(' ')} ${whereClause} ${q.constraints.join(' ')}`;
     this._logQuery(sql, q.bound);
-    let sqlResults: any[] = await this._db.all(sql, q.bound);
+    let sqlResults = this._db.prepare(sql).all(q.bound);
 
     let result: FindResult<T> = {
       totalCount: null,
@@ -913,7 +914,7 @@ export class Database {
       let countConstraints = q.constraints.filter(constr => !constr.startsWith('LIMIT')).join(' ');
       let countSql = `SELECT COUNT(*) FROM ${model.name} ${q.joins.join(' ')} ${whereClause} ${countConstraints}`;
       this._logQuery(countSql, q.bound);
-      let countResult = await this._db.get(countSql, q.bound);
+      let countResult = this._db.prepare(countSql).get(q.bound);
       result.totalCount = countResult['COUNT(*)'] as number;
     }
 
@@ -923,7 +924,7 @@ export class Database {
   async count(model: Model<any>): Promise<number> {
     let sql = `SELECT COUNT(*) FROM ${model.name}`;
     this._logQuery(sql);
-    return (await this._db.get(sql))['COUNT(*)'] as number;
+    return this._db.prepare(sql).get()['COUNT(*)'] as number;
   }
 
   /**
@@ -935,25 +936,32 @@ export class Database {
    * @returns {Promise<Database>} New database object
    */
   static async open(filename: string, options?: DatabaseOpenOptions): Promise<Database> {
-    let db = await sqlite.open(filename, {
-      mode: sqlite3.OPEN_READWRITE | (options && options.shouldCreate === false ? 0 : sqlite3.OPEN_CREATE),
-      promise: Promise
+    options = Object.assign({}, {
+      shouldCreate: false,
+      inMemory: false
+    } as DatabaseOpenOptions, options || {});
+
+    if (filename.toLowerCase() === ':memory:') {
+      options.inMemory = true;
+      filename = 'memdb' + new Date().getTime() + (Math.random() * (10000 - 1) + 1);
+    }
+
+    let db = new sqlite(filename, {
+      memory: options.inMemory,
+      fileMustExist: !options.shouldCreate
     });
-    await db.run('PRAGMA foreign_keys = TRUE');
+
+    db.exec('PRAGMA foreign_keys = TRUE');
     return new Database(db);
   }
 
   /** Protected area **/
 
-  protected _db: sqlite.Database;
+  protected _db: sqlite;
   protected _models: Model<any>[] = [];
 
-  protected constructor(db: sqlite.Database) {
+  protected constructor(db: sqlite) {
     this._db = db;
-  }
-
-  protected async _tuneConnection() {
-    await this._db.run('PRAGMA foreign_keys = TRUE');
   }
 
   protected _logQuery(query: string, bound?: any[]): void {
