@@ -147,7 +147,9 @@ export class Model<T> {
    * List of all fields registered for this model.
    * @returns {FieldSpecWrapper[]} List of fields
    */
-  get fields(): FieldSpecWrapper[] { return Object.values(this._spec) as FieldSpecWrapper[] }
+  get fields(): FieldSpecWrapper[] {
+    return Object.keys(this._spec).map(key => this._spec[key]) as FieldSpecWrapper[];
+  }
 
   /**
    * Model name
@@ -352,7 +354,7 @@ export class Model<T> {
    */
   build(template: { [name: string]: any }): Instance<T> {
     let inst = new DatabaseInstance(this._db, this);
-    for (let field of Object.values(this._spec)) {
+    for (let field of this.fields) {
       let given = template[field.fieldName];
       if (given == null && field.fieldSpec.newGenerate != null) {
         given = field.fieldSpec.newGenerate(given);
