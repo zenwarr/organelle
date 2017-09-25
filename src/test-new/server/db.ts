@@ -1,7 +1,11 @@
-import { expect } from 'chai';
+import { should, expect } from 'chai';
 import {CollationNoCase, Database, Model, TypeHint} from "../../new_server/db";
 import uuid = require("uuid");
-import {EAFNOSUPPORT} from "constants";
+import * as chai from 'chai';
+import * as chaiAsPromised from 'chai-as-promised';
+
+should();
+chai.use(chaiAsPromised);
 
 describe('Database', function() {
   describe('createSchema', function() {
@@ -234,15 +238,16 @@ describe('Database', function() {
       db = await Database.open(':memory:');
       fooModel = db.define('foo', {
         name: { typeHint: TypeHint.Text, unique: true, allowNull: false },
-        value: { typeHint: TypeHint.Text }
+        value: { typeHint: TypeHint.Text },
+        num: { typeHint: TypeHint.Integer }
       });
       await db.flushSchema();
 
-      await fooModel.build({ name: 'name1', value: 'value1' }).$sync();
-      await fooModel.build({ name: 'name2', value: 'value2' }).$sync();
-      await fooModel.build({ name: 'name3', value: 'value3' }).$sync();
-      await fooModel.build({ name: 'name4', value: 'value4' }).$sync();
-      await fooModel.build({ name: 'name5', value: 'value5' }).$sync();
+      await fooModel.build({ name: 'name1', value: 'value1', num: 1 }).$sync();
+      await fooModel.build({ name: 'name2', value: 'value2', num: 2 }).$sync();
+      await fooModel.build({ name: 'name3', value: 'value3', num: 3 }).$sync();
+      await fooModel.build({ name: 'name4', value: 'value4', num: 4 }).$sync();
+      await fooModel.build({ name: 'name5', value: 'value5', num: 5 }).$sync();
     });
 
     it("should find instances by a simple query", async function () {
@@ -291,6 +296,85 @@ describe('Database', function() {
       expect(result.items).to.have.lengthOf(1);
       expect(result.items[0]).to.have.property('name', 'name1');
       expect(result.items[0]).to.have.property('value', 'value1');
+    });
+
+    it("should search with LIKE operator", async function () {
+      let res = await fooModel.find({
+        where: {
+          name: {
+            $like: 'name_'
+          }
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(5);
+    });
+
+    it("should search with other operators", async function () {
+      let res = await fooModel.find({
+        where: {
+          num: {
+            $gt: 3
+          }
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(2);
+    });
+
+    it("should search with logical operators", async function () {
+      let res = await fooModel.find({
+        where: {
+          $or: {
+            name: 'name1',
+            value: 'value2'
+          }
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(2);
+    });
+
+    it("should search with IN operator", async function () {
+      let res = await fooModel.find({
+        where: {
+          name: {
+            $in: ['name1', 'name2', 'name3', 'name26']
+          }
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(3);
+    });
+
+    it("should search with NOT IN operator", async function () {
+      let res = await fooModel.find({
+        where: {
+          name: {
+            $notIn: ['name1', 'name2']
+          }
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(3);
+    });
+
+    it("should throw when unknown field is used", async function () {
+      fooModel.find({
+        where: { wtf: 'value' }
+      }).should.eventually.be.rejected;
+    });
+
+    it("should throw when non-value used with $in operator", async function () {
+      fooModel.find({
+        where: {
+          name: {
+            $in: [
+              123, 'some value', {}
+            ]
+          }
+        }
+      }).should.eventually.be.rejected;
     });
   });
 });

@@ -1,4 +1,5 @@
 import * as sqlite from 'better-sqlite3';
+import {mapFromObject} from "../common/helpers";
 
 const ROWID = 'rowid';
 
@@ -185,6 +186,19 @@ export class Model<T> {
    */
   getFieldWrapper(name: string): FieldSpecWrapper|null {
     return this._spec[name] || null;
+  }
+
+  /**
+   * Just list getField wrapper, but throws an error instead of returning null
+   * @param {string} name Name of the field you are interested in
+   * @returns {FieldSpecWrapper} Field spec
+   */
+  getFieldWrapperChecked(name: string): FieldSpecWrapper {
+    let fw = this.getFieldWrapper(name);
+    if (fw == null) {
+      throw new Error(`No field named [${fw}] found`);
+    }
+    return fw;
   }
 
   /**
@@ -509,15 +523,13 @@ export class Model<T> {
         } else if (target.$fields.has(name)) {
           return target.$fields.get(name);
         } else {
-          throw new Error(`There is no field named [${name}]`);
+          return undefined;
         }
       },
       set: function(target: DatabaseInstance<T>, name: string, value: any, receiver: any): boolean {
         if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
           return Reflect.set(target, name, value, target);
         } else {
-          debugger;
-          console.log(`Creating field with name ${name} and value ${value}`);
           target.$fields.set(name, value);
           return true;
         }
@@ -978,14 +990,112 @@ export class Database {
       bound: []
     };
 
-    if (options.where != null) {
-      for (let whereKey of Object.keys(options.where)) {
-        if (whereKey.startsWith('$')) {
-          // special key
-        } else {
-          q.where.push(whereKey + ' = ?');
-          q.bound.push(options.where[whereKey]);
+    interface WhereResult {
+      query: string;
+      bound: any[];
+    }
+
+    const expectPlain = (value: any): void => {
+      let type = typeof value;
+      if (['string', 'number', 'boolean'].indexOf(type) < 0 && value != null) {
+        throw new Error('Plain value expected, but got [' + Object.toString.call(value) + ']');
+      }
+    };
+
+    const handleWhere = (rootKey: string, root: any): WhereResult => {
+      let result: WhereResult = {
+        query: '',
+        bound: []
+      };
+
+      const aggregateChildren = (obj: any): string[] => {
+        let subConditions: string[] = [];
+        for (let childKey of Object.keys(obj)) {
+          let subc = handleWhere(childKey, obj[childKey]);
+          subConditions.push(subc.query);
+          result.bound.push(...subc.bound);
         }
+        return subConditions;
+      };
+
+      if (rootKey.startsWith('$')) {
+        // special key
+        rootKey = rootKey.toLowerCase();
+        if (rootKey === '$and' || rootKey === '$or') {
+          // join sub-operators with logical one
+          let sqlOperator = rootKey === '$and' ? ' AND ' : ' OR ';
+          result.query = aggregateChildren(root).map(x => '(' + x + ')').join(sqlOperator);
+        } else {
+          throw new Error(`Unknown operator [${rootKey}]`);
+        }
+      } else {
+        // just a value
+        if (typeof root === 'object') {
+          // if it is object, we should inspect it for operators
+          let conditions: string[] = [];
+          for (let opkey of Object.keys(root)) {
+            let childWhere = handleOperator(opkey, rootKey, root[opkey]);
+            conditions.push(childWhere.query);
+            result.bound.push(...childWhere.bound)
+          }
+          if (conditions.length === 0) {
+            throw new Error(`Invalid empty operator object for field ${rootKey}`);
+          } else if (conditions.length === 1) {
+            result.query = conditions[0];
+          } else {
+            result.query = conditions.map(x => '(' + x + ')').join(' AND ');
+          }
+        } else {
+          result.query = rootKey + ' = ?';
+          result.bound.push(model.getFieldWrapperChecked(rootKey).convertToDatabaseForm(root));
+        }
+      }
+
+      return result;
+    };
+
+    const handleMappedOperator = (mapped: string, left: string, right: any): WhereResult => {
+      expectPlain(right);
+      return {
+        query: left + ' ' + mapped + ' ?',
+        bound: [right]
+      };
+    };
+
+    const handleOperator = (operator: string, left: string, right: any): WhereResult => {
+      operator = operator.toLowerCase();
+
+      let mappedOperators = mapFromObject<string>({
+        ['$eq']: '=',
+        ['$like']: 'LIKE',
+        ['$gt']: '>',
+        ['$lt']: '<',
+        ['$gte']: '>=',
+        ['$lte']: '<=',
+        ['$ne']: '<>',
+        ['$glob']: 'GLOB'
+      });
+
+      if (mappedOperators.has(operator.toLowerCase())) {
+        return handleMappedOperator(mappedOperators.get(operator.toLowerCase()) as string, left, right);
+      } else if (operator === '$in' || operator === '$notin') {
+        // we expect a list of values here
+        let bound = (right as any[]).map(x => model.getFieldWrapperChecked(left).convertToDatabaseForm(x));
+        let mapped = operator === '$in' ? 'IN' : 'NOT IN';
+        return {
+          query: left + ' ' + mapped + ' (' + new Array((right as any[]).length).fill('?').join(', ') + ')',
+          bound
+        };
+      }
+
+      throw new Error(`Invalid operator [${operator}]`);
+    };
+
+    if (options.where != null) {
+      for (let key of Object.keys(options.where)) {
+        let wr = handleWhere(key, options.where[key]);
+        q.where.push(wr.query);
+        q.bound.push(...wr.bound);
       }
     }
 

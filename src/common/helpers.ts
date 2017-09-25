@@ -1,3 +1,11 @@
+export function mapFromObject<V>(obj: { [name: string]: V }): Map<string, V> {
+  let map = new Map<string, V>();
+  for (let key of Object.keys(obj)) {
+    map.set(key, obj[key]);
+  }
+  return map;
+}
+
 const INTEGER_FIRST_CHARS = '0123456789+-'.split('').map(x => x.charCodeAt(0));
 const INTEGER_CHARS = '0123456789'.split('').map(x => x.charCodeAt(0));
 const FLOAT_FIRST_CHARS = '0123456789+-.eE'.split('').map(x => x.charCodeAt(0));
