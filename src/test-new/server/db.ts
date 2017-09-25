@@ -1,5 +1,5 @@
 import { should, expect } from 'chai';
-import {CollationNoCase, Database, Model, TypeHint} from "../../new_server/db";
+import {CollationNoCase, Database, Instance, Model, SortOrder, TypeHint} from "../../new_server/db";
 import uuid = require("uuid");
 import * as chai from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
@@ -375,6 +375,112 @@ describe('Database', function() {
           }
         }
       }).should.eventually.be.rejected;
+    });
+  });
+
+  describe("sorting", function () {
+    let db: Database;
+    let fooModel: Model<any>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:');
+      fooModel = db.define('foo', {
+        name: { typeHint: TypeHint.Text },
+        value: { typeHint: TypeHint.Text },
+        num: { typeHint: TypeHint.Integer }
+      });
+      await db.flushSchema();
+
+      await fooModel.build({ name: 'name1', value: 'value5', num: 1 }).$sync();
+      await fooModel.build({ name: 'name2', value: 'value4', num: 2 }).$sync();
+      await fooModel.build({ name: 'name3', value: 'value8', num: 3 }).$sync();
+      await fooModel.build({ name: 'name3', value: 'value3', num: 3 }).$sync();
+      await fooModel.build({ name: 'name4', value: 'value2', num: 4 }).$sync();
+      await fooModel.build({ name: 'name5', value: 'value1', num: 5 }).$sync();
+    });
+
+    it("should apply explicit sorting", async function () {
+      let res = await fooModel.find({
+        where: {
+          name: 'name3'
+        },
+        sort: [
+          { by: 'value', order: SortOrder.Asc }
+        ]
+      });
+
+      expect(res.items).to.have.lengthOf(2);
+      expect(res.items[0]).to.have.property('name', 'name3');
+      expect(res.items[0]).to.have.property('value', 'value3');
+      expect(res.items[1]).to.have.property('name', 'name3');
+      expect(res.items[1]).to.have.property('value', 'value8');
+    });
+
+    it("should throw when unknown sorting property specified", async function () {
+      fooModel.find({
+        sort: [
+          { by: 'wtf' }
+        ]
+      }).should.eventually.be.rejected;
+    });
+
+    it("default sorting should be applied when no other soring options present", async function () {
+      interface Bar {
+        name: string,
+        id: string,
+        num: number
+      }
+
+      let db = await Database.open(':memory:');
+
+      let barModel = db.define<Bar>('bar', {
+        name: { },
+        id: { },
+        num: { }
+      }, {
+        defaultSorting: {
+          by: 'num',
+          order: SortOrder.Desc
+        }
+      });
+      await db.flushSchema();
+
+      await barModel.build({ name: '1', id: 'third', num: 10 }).$sync();
+      await barModel.build({ name: '2', id: 'second', num: 20 }).$sync();
+      await barModel.build({ name: '2', id: 'first', num: 30 }).$sync();
+
+      let res = await barModel.find();
+      expect(res.items).to.have.lengthOf(3);
+      expect(res.items.map(item => item.id)).to.be.deep.equal(['first', 'second', 'third']);
+    });
+
+    it("default sorting should be applied to the end of sorting options", async function () {
+      interface Bar {
+        name: string,
+        id: string,
+        num: number
+      }
+
+      let db = await Database.open(':memory:');
+
+      let barModel = db.define<Bar>('bar', {
+        name: { },
+        id: { },
+        num: { }
+      }, {
+        defaultSorting: 'num'
+      });
+      await db.flushSchema();
+
+      await barModel.build({ name: '1', id: 'first', num: 10 }).$sync();
+      await barModel.build({ name: '2', id: 'third', num: 30 }).$sync();
+      await barModel.build({ name: '2', id: 'second', num: 20 }).$sync();
+
+      let res = await barModel.find({
+        sort: [ 'name' ]
+      });
+      expect(res.items).to.have.lengthOf(3);
+      expect(res.items.map(item => item.id)).to.be.deep.equal(['first', 'second', 'third']);
     });
   });
 });

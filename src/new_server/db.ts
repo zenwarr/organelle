@@ -92,7 +92,7 @@ export class DatabaseInstance<T> {
   };
 }
 
-type Instance<T> = T & DatabaseInstance<T>;
+export type Instance<T> = T & DatabaseInstance<T>;
 
 /**
  * ORM model class.
@@ -111,8 +111,16 @@ export class Model<T> {
     this._name = name;
     this._options = Object.assign({}, {
       createTimestamp: false,
-      updateTimestamp: false
+      updateTimestamp: false,
+      defaultSorting: null
     } as ModelOptions, options);
+
+    if (typeof this._options.defaultSorting === 'string') {
+      this._options.defaultSorting = {
+        by: this._options.defaultSorting,
+        order: SortOrder.Asc
+      };
+    }
 
     for (let fieldName of Object.keys(spec)) {
       this.addField(fieldName, spec[fieldName]);
@@ -163,6 +171,8 @@ export class Model<T> {
    * @returns {ModelOptions} Model options
    */
   get options(): ModelOptions { return this._options; }
+
+  get defaultSorting(): SortProp|null { return this._options.defaultSorting as SortProp|null; }
 
   /**
    * Defined model constraints.
@@ -700,11 +710,24 @@ export interface ModelOptions {
    * If the value is true, each instance is going to have extra 'updatedAt' field storing timestamp for the last time the instance was modified.
    */
   updateTimestamp?: boolean;
+
+  defaultSorting?: string|SortProp|null;
 }
 
 export interface DatabaseOpenOptions {
   shouldCreate?: boolean;
   inMemory?: boolean;
+}
+
+export enum SortOrder {
+  Asc,
+  Desc
+}
+
+export interface SortProp {
+  by: string;
+  order?: SortOrder;
+  caseSensitive?: boolean;
 }
 
 /**
@@ -724,6 +747,11 @@ export interface FindOptions {
    * Whether we should get a total count of results (count of results without LIMIT).
    */
   fetchTotalCount?: boolean;
+
+  /**
+   * Sorting options.
+   */
+  sort?: (SortProp|string)[];
 }
 
 export interface FindResult<T> {
@@ -1106,6 +1134,53 @@ export class Database {
       q.constraints.push('OFFSET ' + options.offset);
     }
 
+    let sortParts: string[] = [];
+    let defSorting = model.defaultSorting;
+    if (options.sort != null && options.sort.length > 0) {
+      // apply specified sorting rules
+      for (let sortProp of options.sort) {
+        if (typeof sortProp === 'string') {
+          if (model.getFieldSpec(sortProp) == null) {
+            throw new Error(`Invalid sorting property: no field [${sortProp}]`);
+          }
+          sortParts.push(this._makeSort(sortProp, SortOrder.Asc, false));
+        } else {
+          if (model.getFieldSpec(sortProp.by) == null) {
+            throw new Error(`Invalid sorting property: no field [${sortProp}]`);
+          }
+          sortParts.push(this._makeSort(sortProp.by, sortProp.order, sortProp.caseSensitive));
+        }
+      }
+
+      if (defSorting != null) {
+        // check if default sorting option was already used
+        if (!options.sort.some(x => {
+              return (typeof x === 'string' && x === (defSorting as SortProp).by) ||
+                  (typeof x !== 'string' && x.by === (defSorting as SortProp).by);
+            })) {
+          // if default sorting option was not used, add it to the end
+          if (model.getFieldSpec(defSorting.by) == null) {
+            throw new Error(`Invalid sorting property: no field [${defSorting.by}]`);
+          }
+          sortParts.push(this._makeSort(defSorting.by, defSorting.order, defSorting.caseSensitive));
+        }
+      }
+    }
+
+    if (sortParts.length === 0 && defSorting != null) {
+      sortParts.push(this._makeSort(defSorting.by, defSorting.order, defSorting.caseSensitive));
+    }
+
+    if (sortParts.length > 0) {
+      q.constraints.push('ORDER BY ' + sortParts.join(', '));
+    }
+
     return q;
+  }
+
+  protected _makeSort(by: string, order?: SortOrder, caseSensitive?: boolean): string {
+    let collation = caseSensitive ? '' : 'COLLATE NOCASE';
+    let sortOrder = order === SortOrder.Desc ? 'DESC' : 'ASC';
+    return `${by} ${collation} ${sortOrder}`;
   }
 }
