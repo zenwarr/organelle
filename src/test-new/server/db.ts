@@ -1,5 +1,8 @@
 import { should, expect } from 'chai';
-import {CollationNoCase, Database, Instance, Model, SortOrder, TypeHint} from "../../new_server/db";
+import {
+  CollationNoCase, Database, Model, MultiRelation, SingleRelation, SortOrder,
+  TypeHint
+} from "../../new_server/db";
 import uuid = require("uuid");
 import * as chai from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
@@ -69,16 +72,18 @@ describe('Database', function() {
 
     it("should create one-to-one association", function () {
       let fooModel = db.define('foo', {
-        id: { typeHint: TypeHint.Integer }
+        id: { typeHint: TypeHint.Integer, primaryKey: true }
       });
 
       let barModel = db.define('bar', {
         barId: { typeHint: TypeHint.Integer }
       });
-      barModel.oneToOne(fooModel, 'fooId', 'id');
+      barModel.oneToOne(fooModel, null, {
+        foreignKey: 'fooId'
+      });
 
       expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(id INTEGER); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id))')
+          .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id))')
     });
 
     it("should automatically find a primary key to link to", function () {
@@ -89,7 +94,9 @@ describe('Database', function() {
       let barModel = db.define('bar', {
         barId: { typeHint: TypeHint.Integer }
       });
-      barModel.oneToOne(fooModel, 'fooId');
+      barModel.oneToOne(fooModel, null, {
+        foreignKey: 'fooId'
+      });
 
       expect(db.createSchema()).to.be
           .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id))');
@@ -103,10 +110,12 @@ describe('Database', function() {
       let barModel = db.define('bar', {
         barId: { typeHint: TypeHint.Integer, primaryKey: true }
       });
-      barModel.oneToMany(fooModel, 'barId');
+      barModel.oneToMany(fooModel, null, {
+        foreignKey: 'barId'
+      });
 
       expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(fooId INTEGER, barId INTEGER UNIQUE, FOREIGN KEY (barId) REFERENCES bar(barId)); CREATE TABLE bar(barId INTEGER PRIMARY KEY)');
+          .equal('CREATE TABLE foo(fooId INTEGER, barId INTEGER, FOREIGN KEY (barId) REFERENCES bar(barId)); CREATE TABLE bar(barId INTEGER PRIMARY KEY)');
     });
 
     it("should create many-to-many association", function () {
@@ -117,7 +126,11 @@ describe('Database', function() {
       let barModel = db.define('bar', {
         barId: { typeHint: TypeHint.Integer, primaryKey: true }
       });
-      barModel.manyToMany(fooModel, 'foobar', 'barId', 'fooId');
+      barModel.manyToMany(fooModel, null, {
+        model: 'foobar',
+        leftForeignKey: 'barId',
+        rightForeignKey: 'fooId'
+      });
 
       expect(db.createSchema()).to.be
           .equal('CREATE TABLE foo(fooId INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER PRIMARY KEY); CREATE TABLE foobar(barId INTEGER, fooId INTEGER, FOREIGN KEY (barId) REFERENCES bar(barId), FOREIGN KEY (fooId) REFERENCES foo(fooId), UNIQUE(barId, fooId))');
@@ -179,7 +192,7 @@ describe('Database', function() {
         name: 'option name',
         value: 'option value'
       });
-      await obj.$sync();
+      await obj.$flush();
 
       expect(obj.$created).to.be.true;
     });
@@ -199,7 +212,46 @@ describe('Database', function() {
         value: ''
       });
       expect(obj).to.have.property('uuid', GENERATED_UUID);
-      await obj.$sync();
+      await obj.$flush();
+    });
+  });
+
+  describe("primary key", function () {
+    let db: Database;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:');
+    });
+
+    it("primary key should be accesible", async function () {
+      interface T {
+        myIdent: string,
+        name: string,
+        value: string
+      }
+
+      let tModel = db.define<T>('test', {
+        myIdent: { typeHint: TypeHint.Text, primaryKey: true },
+        name: {},
+        value: {}
+      });
+      await db.flushSchema();
+
+      let inst = tModel.build({});
+      expect(inst.myIdent).to.be.null;
+      expect(inst.$rowId).to.be.null;
+
+      inst.myIdent = 'some ident';
+      expect(inst.myIdent).to.be.equal('some ident');
+      expect(inst.$rowId).to.be.equal('some ident');
+
+      inst.name = 'some name';
+      expect(inst.myIdent).to.be.equal('some ident');
+      expect(inst.$rowId).to.be.equal('some ident');
+
+      inst.$rowId = 'another ident';
+      expect(inst.myIdent).to.be.equal('another ident');
+      expect(inst.$rowId).to.be.equal('another ident');
     });
   });
 
@@ -222,10 +274,10 @@ describe('Database', function() {
         name: 'some name',
         value: 'some value'
       });
-      await inst1.$sync();
+      await inst1.$flush();
 
       inst1.$fields.set('name', 'another name');
-      await inst1.$sync();
+      await inst1.$flush();
     });
 
     it("should remove instance without errors", async function () {
@@ -235,7 +287,7 @@ describe('Database', function() {
         name: 'some name',
         value: 'some value'
       });
-      await inst.$sync();
+      await inst.$flush();
 
       await inst.$remove();
     });
@@ -250,15 +302,16 @@ describe('Database', function() {
       fooModel = db.define('foo', {
         name: { typeHint: TypeHint.Text, unique: true, allowNull: false },
         value: { typeHint: TypeHint.Text },
-        num: { typeHint: TypeHint.Integer }
+        num: { typeHint: TypeHint.Integer },
+        quirky: { serialize: x => x.value, deserialize: x => { return { x } } }
       });
       await db.flushSchema();
 
-      await fooModel.build({ name: 'name1', value: 'value1', num: 1 }).$sync();
-      await fooModel.build({ name: 'name2', value: 'value2', num: 2 }).$sync();
-      await fooModel.build({ name: 'name3', value: 'value3', num: 3 }).$sync();
-      await fooModel.build({ name: 'name4', value: 'value4', num: 4 }).$sync();
-      await fooModel.build({ name: 'name5', value: 'value5', num: 5 }).$sync();
+      await fooModel.build({ name: 'name1', value: 'value1', num: 1 }).$flush();
+      await fooModel.build({ name: 'name2', value: 'value2', num: 2 }).$flush();
+      await fooModel.build({ name: 'name3', value: 'value3', num: 3, quirky: { value: 123 } }).$flush();
+      await fooModel.build({ name: 'name4', value: 'value4', num: 4 }).$flush();
+      await fooModel.build({ name: 'name5', value: 'value5', num: 5 }).$flush();
     });
 
     it("should find instances by a simple query", async function () {
@@ -371,13 +424,13 @@ describe('Database', function() {
     });
 
     it("should throw when unknown field is used", async function () {
-      fooModel.find({
+      return fooModel.find({
         where: { wtf: 'value' }
-      }).should.eventually.be.rejected;
+      }).should.be.rejected;
     });
 
     it("should throw when non-value used with $in operator", async function () {
-      fooModel.find({
+      return fooModel.find({
         where: {
           name: {
             $in: [
@@ -385,7 +438,22 @@ describe('Database', function() {
             ]
           }
         }
-      }).should.eventually.be.rejected;
+      }).should.be.rejected;
+    });
+
+    it("search value should be converted to database form", async function () {
+      let res = await fooModel.find({
+        where: {
+          quirky: {
+            $eq: {
+              value: 123
+            }
+          }
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('name', 'name3');
     });
   });
 
@@ -402,12 +470,12 @@ describe('Database', function() {
       });
       await db.flushSchema();
 
-      await fooModel.build({ name: 'name1', value: 'value5', num: 1 }).$sync();
-      await fooModel.build({ name: 'name2', value: 'value4', num: 2 }).$sync();
-      await fooModel.build({ name: 'name3', value: 'value8', num: 3 }).$sync();
-      await fooModel.build({ name: 'name3', value: 'value3', num: 3 }).$sync();
-      await fooModel.build({ name: 'name4', value: 'value2', num: 4 }).$sync();
-      await fooModel.build({ name: 'name5', value: 'value1', num: 5 }).$sync();
+      await fooModel.build({ name: 'name1', value: 'value5', num: 1 }).$flush();
+      await fooModel.build({ name: 'name2', value: 'value4', num: 2 }).$flush();
+      await fooModel.build({ name: 'name3', value: 'value8', num: 3 }).$flush();
+      await fooModel.build({ name: 'name3', value: 'value3', num: 3 }).$flush();
+      await fooModel.build({ name: 'name4', value: 'value2', num: 4 }).$flush();
+      await fooModel.build({ name: 'name5', value: 'value1', num: 5 }).$flush();
     });
 
     it("should apply explicit sorting", async function () {
@@ -428,11 +496,11 @@ describe('Database', function() {
     });
 
     it("should throw when unknown sorting property specified", async function () {
-      fooModel.find({
+      return fooModel.find({
         sort: [
           { by: 'wtf' }
         ]
-      }).should.eventually.be.rejected;
+      }).should.be.rejected;
     });
 
     it("default sorting should be applied when no other soring options present", async function () {
@@ -456,9 +524,9 @@ describe('Database', function() {
       });
       await db.flushSchema();
 
-      await barModel.build({ name: '1', id: 'third', num: 10 }).$sync();
-      await barModel.build({ name: '2', id: 'second', num: 20 }).$sync();
-      await barModel.build({ name: '2', id: 'first', num: 30 }).$sync();
+      await barModel.build({ name: '1', id: 'third', num: 10 }).$flush();
+      await barModel.build({ name: '2', id: 'second', num: 20 }).$flush();
+      await barModel.build({ name: '2', id: 'first', num: 30 }).$flush();
 
       let res = await barModel.find();
       expect(res.items).to.have.lengthOf(3);
@@ -483,15 +551,316 @@ describe('Database', function() {
       });
       await db.flushSchema();
 
-      await barModel.build({ name: '1', id: 'first', num: 10 }).$sync();
-      await barModel.build({ name: '2', id: 'third', num: 30 }).$sync();
-      await barModel.build({ name: '2', id: 'second', num: 20 }).$sync();
+      await barModel.build({ name: '1', id: 'first', num: 10 }).$flush();
+      await barModel.build({ name: '2', id: 'third', num: 30 }).$flush();
+      await barModel.build({ name: '2', id: 'second', num: 20 }).$flush();
 
       let res = await barModel.find({
         sort: [ 'name' ]
       });
       expect(res.items).to.have.lengthOf(3);
       expect(res.items.map(item => item.id)).to.be.deep.equal(['first', 'second', 'third']);
+    });
+  });
+
+  describe("one-to-one relation", function () {
+    interface Foo {
+      id: number;
+      title: string;
+      bar: SingleRelation<Foo, Bar>;
+    }
+
+    interface Bar {
+      id: number;
+      name: string;
+      foo: SingleRelation<Bar, Foo>;
+    }
+
+    let db: Database;
+    let fooModel: Model<Foo>;
+    let barModel: Model<Bar>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:');
+
+      fooModel = db.define<Foo>('foo', {
+        id: { primaryKey: true },
+        title: {}
+      });
+
+      barModel = db.define<Bar>('bar', {
+        id: { primaryKey: true },
+        name: {}
+      });
+
+      fooModel.oneToOne(barModel, 'bar', { companionField: 'foo' });
+
+      await db.flushSchema();
+
+      await fooModel.build({ id: 1, title: 'mist' }).$flush();
+      await fooModel.build({ id: 2, title: 'mockingbird' }).$flush();
+      await fooModel.build({ id: 3, title: 'crime' }).$flush();
+      await fooModel.build({ id: 20, title: 'some item' }).$flush();
+
+      await barModel.build({ id: 10, title: 'king' }).$flush();
+      await barModel.build({ id: 20, title: 'lee '}).$flush();
+      await barModel.build({ id: 30, title: 'dost' }).$flush();
+      await barModel.build({ id: 40, title: 'person' }).$flush();
+    });
+
+    it("should create relation access objects", function () {
+      expect(fooModel.build({})).to.have.property('bar');
+      expect(barModel.build({})).to.have.property('foo');
+    });
+
+    it("should throw when linking an unflushed object", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      return foo1.bar.link(barModel.build({})).should.be.rejected;
+    });
+
+    it("should throw when linking an instance of incorrect model", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      let foo2 = await fooModel.findByPKChecked(20);
+      await foo1.bar.link(foo2 as any).should.be.rejected;
+
+      let foo1After = await fooModel.findByPKChecked(1);
+      expect(await foo1After.bar.get()).to.be.null;
+    });
+
+    it("should get related object", async function () {
+      expect(await (await fooModel.findByPKChecked(1)).bar.get()).to.be.null;
+    });
+
+    it("should link an object", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      let bar10 = await barModel.findByPKChecked(10);
+      await foo1.bar.link(bar10);
+      expect(await foo1.bar.get()).to.have.property('id', 10);
+      expect(await (await barModel.findByPKChecked(10)).foo.get()).to.have.property('id', 1);
+    });
+
+    it("should unlink an object", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      let bar10 = await barModel.findByPKChecked(10);
+      await foo1.bar.link(bar10);
+      await foo1.bar.unlink();
+      expect(await foo1.bar.get()).to.be.null;
+      expect(await (await barModel.findByPKChecked(10)).foo.get()).to.be.null;
+    });
+
+    it("should link using companion access object", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      let bar10 = await barModel.findByPKChecked(10);
+      await bar10.foo.link(foo1);
+      expect(await (await fooModel.findByPKChecked(1)).bar.get()).to.have.property('id', 10);
+      expect(await (await barModel.findByPKChecked(10)).foo.get()).to.have.property('id', 1);
+    });
+
+    it("should unlink using companion access object", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      let bar10 = await barModel.findByPKChecked(10);
+      await foo1.bar.link(bar10);
+      await bar10.foo.unlink();
+      (await fooModel.findByPKChecked(1)).bar.get().should.eventually.be.null;
+      (await barModel.findByPKChecked(10)).foo.get().should.eventually.be.null;
+    });
+  });
+
+  describe("one-to-many relation", function () {
+    interface Foo {
+      id: number;
+      title: string;
+      bars: MultiRelation<Foo, Bar, void>;
+    }
+
+    interface Bar {
+      id: number;
+      tag: string;
+      foo: SingleRelation<Bar, Foo>;
+    }
+
+    let db: Database;
+    let fooModel: Model<Foo>;
+    let barModel: Model<Bar>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:', { shouldCreate: true });
+
+      fooModel = db.define<Foo>('foo', {
+        id: { primaryKey: true, typeHint: TypeHint.Integer },
+        title: { typeHint: TypeHint.Text }
+      });
+
+      barModel = db.define<Bar>('bar', {
+        id: { typeHint: TypeHint.Integer, primaryKey: true },
+        tag: { typeHint: TypeHint.Text, collation: CollationNoCase }
+      });
+
+      fooModel.oneToMany(barModel, 'bars', { companionField: 'foo' });
+
+      await db.flushSchema();
+
+      await fooModel.build({ id: 1, title: 'mist' }).$flush();
+      await fooModel.build({ id: 2, title: 'mockingbird' }).$flush();
+
+      await barModel.build({ id: 10, tag: 'king' }).$flush();
+      await barModel.build({ id: 20, tag: 'lee'}).$flush();
+    });
+
+    it("should create relation access objects", function () {
+      expect(fooModel.build({})).to.have.property('bars');
+      expect(barModel.build({})).to.have.property('foo');
+    });
+
+    it("should get empty list of related instances", async function () {
+      let foo1 = await fooModel.findByPKChecked(1);
+      expect((await foo1.bars.find()).items).to.have.lengthOf(0);
+      let bar10 = await barModel.findByPKChecked(10);
+      expect(await bar10.foo.get()).to.be.null;
+    });
+
+    it("should link an instance to another using companion field", async function () {
+      let foo2 = await fooModel.findByPKChecked(2);
+      let bar10 = await barModel.findByPKChecked(10);
+      await foo2.bars.link(bar10);
+
+      let foo2_ = await fooModel.findByPKChecked(2);
+      let bar10_ = await barModel.findByPKChecked(10);
+      let res = await foo2_.bars.find();
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 10);
+      expect((await bar10_.foo.get())).to.have.property('id', 2);
+    });
+
+    it("should link multiple instances", async function () {
+      let foo2 = await fooModel.findByPKChecked(2);
+      let bar10 = await barModel.findByPKChecked(10);
+      let bar20 = await barModel.findByPKChecked(20);
+      await foo2.bars.link(bar10);
+      await foo2.bars.link(bar20);
+
+      let foo2_ = await fooModel.findByPKChecked(2);
+      let bar10_ = await barModel.findByPKChecked(10);
+      let bar20_ = await barModel.findByPKChecked(20);
+      let res = await foo2_.bars.find();
+      expect(res.items).to.have.lengthOf(2);
+      expect((await bar10_.foo.get())).to.have.property('id', 2);
+      expect((await bar20_.foo.get())).to.have.property('id', 2);
+    });
+
+    it("should unlink instances", async function () {
+      let foo2 = await fooModel.findByPKChecked(2);
+      await foo2.bars.linkByPK(10, 20);
+
+      let foo2_ = await fooModel.findByPKChecked(2);
+      let bar10_ = await barModel.findByPKChecked(10);
+      let bar20_ = await barModel.findByPKChecked(20);
+      let res = await foo2_.bars.find();
+      expect(res.items).to.have.lengthOf(2);
+      expect((await bar10_.foo.get())).to.have.property('id', 2);
+      expect((await bar20_.foo.get())).to.have.property('id', 2);
+
+      let bar10 = await barModel.findByPKChecked(10);
+      await foo2.bars.unlink(bar10);
+
+      foo2_ = await fooModel.findByPKChecked(2);
+      bar10_ = await barModel.findByPKChecked(10);
+      bar20_ = await barModel.findByPKChecked(20);
+      res = await foo2_.bars.find();
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 20);
+      expect((await bar10_.foo.get())).to.be.null;
+      expect((await bar20_.foo.get())).to.have.property('id', 2);
+    });
+
+    it("should unlink items matching criteria", async function () {
+      let foo = await fooModel.findByPKChecked(2);
+      await foo.bars.linkByPK(10, 20);
+
+      let res1 = await (await fooModel.findByPKChecked(2)).bars.find();
+      expect(res1.items).to.have.lengthOf(2);
+
+      await foo.bars.unlinkWhere({
+        tag: 'lee'
+      });
+
+      let res2 = await (await fooModel.findByPKChecked(2)).bars.find();
+      expect(res2.items).to.have.lengthOf(1);
+      expect(res2.items[0]).to.have.property('id', 10);
+    });
+  });
+
+  describe("many-to-many relation", function () {
+    interface Foo {
+      id: number;
+      title: string;
+      bars: MultiRelation<Foo, Bar, FooBar>;
+    }
+
+    interface Bar {
+      id: number;
+      tag: string;
+      foes: MultiRelation<Bar, Foo, FooBar>;
+    }
+
+    interface FooBar {
+      relationType: string;
+    }
+
+    let db: Database;
+    let fooModel: Model<Foo>;
+    let barModel: Model<Bar>;
+    let foobarModel: Model<FooBar>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:', { shouldCreate: true });
+
+      fooModel = db.define<Foo>('foo', {
+        id: { primaryKey: true },
+        title: { }
+      });
+
+      barModel = db.define<Bar>('bar', {
+        id: { typeHint: TypeHint.Integer, primaryKey: true },
+        tag: { }
+      });
+
+      foobarModel = db.define<FooBar>('foobar', {
+        relationType: { }
+      });
+
+      fooModel.manyToMany(barModel, 'bars', {
+        companionField: 'foes',
+        model: 'foobar'
+      });
+
+      await db.flushSchema();
+
+      await fooModel.build({ id: 1, title: 'mist' }).$flush();
+      await fooModel.build({ id: 2, title: 'mockingbird' }).$flush();
+
+      await barModel.build({ id: 10, tag: 'king' }).$flush();
+      await barModel.build({ id: 20, tag: 'lee'}).$flush();
+    });
+
+    it("should create access objects", function () {
+      expect(fooModel.build({})).to.have.property('bars');
+      expect(barModel.build({})).to.have.property('foes');
+    });
+
+    it("should return empty list when no instances linked", async function () {
+      let foo = fooModel.build({});
+      let list = await foo.bars.find();
+      console.log(list);
+      expect((await foo.bars.find()).items).to.have.lengthOf(0);
+      expect((await foo.bars.find()).relationItems).to.have.lengthOf(0);
+
+      let bar = barModel.build({});
+      expect((await bar.foes.find()).items).to.have.lengthOf(0);
+      expect((await bar.foes.find()).relationItems).to.have.lengthOf(0);
+
+      let foo1 = await fooModel.findByPKChecked(1);
+      expect((await foo1.bars.find()).items).to.have.lengthOf(0);
     });
   });
 });

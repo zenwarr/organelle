@@ -1,5 +1,5 @@
 import * as sqlite from 'better-sqlite3';
-import {isAlphaCode, isDigitCode, mapFromObject} from "../common/helpers";
+import {capitalize, isAlphaCode, isDigitCode, mapFromObject} from "../common/helpers";
 
 const ROWID = 'rowid';
 
@@ -13,7 +13,8 @@ export class DatabaseInstance<T> {
       model: model,
       fields: new Map(),
       created: false,
-      rowId: null
+      rowId: null,
+      relations: new Map()
     };
   }
 
@@ -39,7 +40,7 @@ export class DatabaseInstance<T> {
    * If specified, only these fields are going to be updated in database.
    * @returns {Promise<void>} Fulfilled when done
    */
-  async $sync(updateFields?: string[]): Promise<void> {
+  async $flush(updateFields?: string[]): Promise<void> {
     if (this.$created) {
       return this.$db.updateInstance(this, updateFields);
     } else {
@@ -63,6 +64,7 @@ export class DatabaseInstance<T> {
    * If object has already been removed, this value is false.
    */
   get $created(): boolean { return this.$d.created; }
+  set $created(value: boolean) { this.$d.created = value; }
 
   /**
    * Implicit row id.
@@ -71,7 +73,12 @@ export class DatabaseInstance<T> {
    * Otherwise, it has some unique value.
    */
   get $rowId(): any { return this.$d.rowId; }
-  set $rowId(value: any) { this.$d.rowId = value; }
+  set $rowId(value: any) {
+    this.$d.rowId = value;
+    if (this.$fields.has(this.$model.getPrimaryKeyName())) {
+      this.$fields.set(this.$model.getPrimaryKeyName(), value);
+    }
+  }
 
   /**
    * Map of all fields of the instance.
@@ -81,6 +88,35 @@ export class DatabaseInstance<T> {
     return this.$d.fields;
   }
 
+  get $relations(): Map<string, Relation> { return this.$d.relations; }
+
+  $get(prop: string): any {
+    if (this.$fields.has(prop)) {
+      return this.$fields.get(prop);
+    } else if (this.$relations.has(prop)) {
+      return this.$relations.get(prop);
+    } else {
+      return undefined;
+    }
+  }
+
+  $set(prop: string, value: any): boolean {
+    if (this.$relations.has(prop)) {
+      return false;
+    } else {
+      this.$fields.set(prop, value);
+      let fsw = this.$model.getFieldWrapper(prop);
+      if (fsw && fsw.fieldSpec.primaryKey === true) {
+        this.$rowId = value;
+      }
+      return true;
+    }
+  }
+
+  $has(prop: string): boolean {
+    return this.$fields.has(prop) || this.$relations.has(prop)
+  }
+
   /** Protected area **/
 
   protected $d: {
@@ -88,11 +124,449 @@ export class DatabaseInstance<T> {
     model: Model<T>,
     fields: Map<string, any>,
     created: boolean,
-    rowId: any
+    rowId: any,
+    relations: Map<string, Relation>
   };
 }
 
 export type Instance<T> = T & DatabaseInstance<T>;
+
+interface PrivateRelation {
+  getJoinCondition(model: Model<any>, companionAlias: string): string;
+  relationData: RelationFieldData;
+}
+
+export interface Relation extends PrivateRelation {
+  name: string;
+}
+
+export interface SingleRelation<T, R> extends Relation {
+  get(): Promise<Instance<R>|null>;
+  link(related: Instance<R>): Promise<void>;
+  linkByPK(pk: any): Promise<void>;
+  unlink(): Promise<void>;
+}
+
+export interface MultiRelation<T, R, RR> extends Relation {
+  link(...value: Instance<R>[]): Promise<void>;
+  linkByPK(...pk: any[]): Promise<void>;
+  unlink(value: Instance<R>): Promise<void>;
+  unlinkByPK(pk: any): Promise<void>;
+  unlinkWhere(where: WhereCriterion): Promise<void>;
+  unlinkAll(): Promise<void>;
+  find(options?: FindOptions): Promise<FindRelationResult<R, RR>>;
+}
+
+export interface SingleRelationOptions {
+  foreignKey?: string;
+  companionField?: string;
+}
+
+export interface MultiRelationOptions {
+  model?: Model<any>|string;
+  leftForeignKey?: string;
+  rightForeignKey?: string;
+  companionField?: string;
+}
+
+enum RelationType {
+  OneToOne,
+  ManyToOne,
+  OneToMany,
+  ManyToMany
+}
+
+interface RelationFieldData {
+  name: string;
+  type: RelationType;
+  model: Model<any>;
+  companionModel: Model<any>;
+  isLeft: boolean;
+}
+
+interface SingleRelationFieldData extends RelationFieldData {
+  foreignKey: string;
+}
+
+interface MultiRelationFieldData extends RelationFieldData {
+  relationModel: Model<any>;
+  leftForeignKey: string;
+  rightForeignKey: string;
+}
+
+/**
+ * Handles one-to-one relationships for both sides, many-to-one for left side and one-to-many for right side.
+ * In all cases, the model that has DbSingleRelation attached, stores primary key value of companion model.
+ * A single exception is one-to-one relationship where DbSingleRelation is attached to right side model.
+ * In this case isCompanion flag is true, and its companion model stores the primary key of the current model.
+ */
+class DbSingleRelation<T, R> implements SingleRelation<T, R> {
+  constructor(inst: DatabaseInstance<T>, d: SingleRelationFieldData) {
+    this._inst = inst;
+    this._d = d;
+  }
+
+  /**
+   * Gets the instance linked to the current model.
+   * @returns {Promise<Instance<R>>} Linked instance or null if no instance linked.
+   */
+  async get(): Promise<Instance<R>|null> {
+    if (!this._isCompanion) {
+      // just find a companion instance by its primary key
+      let fk = this._inst.$get(this._d.foreignKey);
+      return fk == null ? null : this._d.companionModel.findByPK(fk);
+    } else {
+      // we should find an instance which foreign key is equal to our primary key
+      if (!this._inst.$rowId == null || !this._inst.$created) {
+        return null;
+      } else {
+        return this._d.companionModel.findOne({
+          where: {
+            [this._d.foreignKey]: this._inst.$rowId
+          }
+        });
+      }
+    }
+  }
+
+  /**
+   * Links an existing instance to the current instance.
+   * @param {Instance<R>} related Model to link to
+   * @returns {Promise<void>} Fulfilled when done
+   */
+  async link(related: Instance<R>): Promise<void> {
+    if (!related.$created || related.$rowId == null) {
+      throw new Error('Cannot create a relation: primary key undefined or instance has not been flushed');
+    }
+    if (related.$model != this._d.companionModel) {
+      throw new Error('Cannot create a relation: an instance given has incorrect model');
+    }
+
+    return this.linkByPK(related.$rowId);
+  }
+
+  /**
+   * Same as link, but does not require creating and fetching an instance to link if you know its primary key value.
+   * @param pk Primary key value of instance to link.
+   * @returns {Promise<void>} Fulfilled when done
+   */
+  async linkByPK(pk: any): Promise<void> {
+    if (pk == null) {
+      throw new Error('Cannot create relation: primary key is undefined');
+    }
+
+    if (!this._isCompanion) {
+      // just set our foreign key to the primary key of an item we want to link
+      this._inst.$set(this._d.foreignKey, pk);
+      return this._inst.$flush([ this._d.foreignKey ]);
+    } else {
+      // set a foreign key on the related instance to the value of our primary key
+      let related = await this._d.companionModel.findByPK(pk);
+      if (related == null) {
+        throw new Error('Cannot create a relation: no instance with given primary key found');
+      }
+      related.$set(this._d.foreignKey, this._inst.$rowId);
+      return related.$flush([ this._d.foreignKey ]);
+    }
+  }
+
+  /**
+   * Unlink the currently linked instance.
+   * If no instance linked, does nothing.
+   * @returns {Promise<void>} Fulfilled when done
+   */
+  async unlink(): Promise<void> {
+    if (!this._isCompanion) {
+      this._inst.$set(this._d.foreignKey, null);
+      return this._inst.$flush([ this._d.foreignKey ]);
+    } else {
+      return this._d.companionModel.update({
+        where: {
+          [this._d.foreignKey]: this._inst.$rowId
+        },
+        set: {
+          [this._d.foreignKey]: null
+        }
+      });
+    }
+  }
+
+  get name(): string { return this._d.name; }
+
+  getJoinCondition(model: Model<any>, companionAlias: string): string {
+    if (model === this._d.model) {
+      let companionPk = this._d.companionModel.getPrimaryKeyName();
+      if (!this._isCompanion) {
+        return `${companionAlias}.${companionPk} = ${model.name}.${this._d.foreignKey}`;
+      } else {
+        return `${companionAlias}.${this._d.foreignKey} = ${model.name}.${this._d.model.getPrimaryKeyName()}`;
+      }
+    } else {
+      throw new Error('Relation.getJoinCondition: invalid model');
+    }
+  }
+
+  get relationData(): RelationFieldData { return this._d; }
+
+  /** Protected area **/
+
+  protected _inst: DatabaseInstance<T>;
+  protected _d: SingleRelationFieldData;
+
+  protected get _isCompanion(): boolean {
+    return this._d.type === RelationType.OneToOne && !this._d.isLeft;
+  }
+}
+
+class ModelMismatchError extends Error {
+  constructor() {
+    super('Cannot create a relation: an instance given has incorrect model')
+  }
+}
+
+class InstanceInvalidError extends Error {
+  constructor() {
+    super('Cannot link an instance: primary key is invalid or instance not flushed');
+  }
+}
+
+/**
+ * Handles one-to-many for left side and many-to-one for right side.
+ * In all cases, the companion model stores primary indexes of instances of this model and this primary key can be repeated.
+ */
+class DbManyRelation<T, R> implements MultiRelation<T, R, void> {
+  constructor(inst: DatabaseInstance<T>, d: SingleRelationFieldData) {
+    this._inst = inst;
+    this._d = d;
+  }
+
+  get name(): string { return this._d.name; }
+
+  async link(...instances: Instance<R>[]): Promise<void> {
+    this._ensureGood();
+    for (let inst of instances) {
+      if (!inst.$created || inst.$rowId == null || inst.$model !== this._d.companionModel) {
+        throw new InstanceInvalidError();
+      }
+      if (inst.$model !== this._d.companionModel) {
+        throw new ModelMismatchError();
+      }
+      await this.linkByPK(inst.$rowId);
+    }
+  }
+
+  async linkByPK(...pks: any[]): Promise<void> {
+    this._ensureGood();
+    for (let pk of pks) {
+      if (pk == null) {
+        throw new InstanceInvalidError();
+      }
+      await this._d.companionModel.update({
+        where: {
+          [this._d.companionModel.getPrimaryKeyName()]: pk
+        },
+        set: {
+          [this._d.foreignKey]: this._inst.$rowId
+        }
+      });
+    }
+  }
+
+  async unlink(value: Instance<R>): Promise<void> {
+    this._ensureGood();
+    if (value == null || !value.$created || value.$rowId == null) {
+      throw new InstanceInvalidError();
+    }
+    if (value.$model !== this._d.companionModel) {
+      throw new ModelMismatchError();
+    }
+    return this.unlinkByPK(value.$rowId);
+  }
+
+  async unlinkByPK(pk: any): Promise<void> {
+    this._ensureGood();
+    if (pk == null) {
+      throw new InstanceInvalidError();
+    }
+
+    return this._d.companionModel.update({
+      where: {
+        [this._d.companionModel.getPrimaryKeyName()]: pk
+      },
+      set: {
+        [this._d.foreignKey]: null
+      }
+    })
+  }
+
+  async unlinkWhere(where: WhereCriterion): Promise<void> {
+    this._ensureGood();
+
+    let crit: WhereCriterion = Object.assign({}, where);
+    crit[this._d.foreignKey] = this._inst.$rowId;
+
+    return this._d.companionModel.update({
+      where: crit,
+      set: {
+        [this._d.foreignKey]: null
+      }
+    });
+  }
+
+  async unlinkAll(): Promise<void> {
+    this._ensureGood();
+
+    return this.unlinkWhere({
+      where: { }
+    });
+  }
+
+  async find(options: FindOptions): Promise<FindRelationResult<R, void>> {
+    this._ensureGood();
+
+    let result = await this._d.companionModel.find({
+      where: {
+        [this._d.foreignKey]: {
+          $eq: this._inst.$rowId
+        }
+      }
+    }) as FindRelationResult<R, void>;
+    result.relationItems = [];
+    return result;
+  }
+
+  getJoinCondition(model: Model<any>, companionAlias: string): string {
+    if (model === this._d.model) {
+      return `${companionAlias}.${this._d.foreignKey} = ${model.name}.${model.getPrimaryKeyName()}`;
+    } else {
+      throw new Error('Relation.getJoinCondition: invalid model');
+    }
+  }
+
+  get relationData(): RelationFieldData { return this._d; }
+
+  /** Protected area **/
+
+  protected _inst: DatabaseInstance<T>;
+  protected _d: SingleRelationFieldData;
+
+  protected _ensureGood(): void {
+    if (this._inst.$rowId == null || !this._inst.$created) {
+      throw new InstanceInvalidError();
+    }
+  }
+}
+
+/**
+ * Handles both sides for many-to-many relation.
+ * This relation is implemented through extra table that stores primary keys for both models.
+ */
+class DbMultiRelation<T, R, RR> implements MultiRelation<T, R, RR> {
+  constructor(inst: DatabaseInstance<T>, rd: MultiRelationFieldData) {
+    this._d = rd;
+    this._inst = inst;
+  }
+
+  link(...value: Instance<R>[]): Promise<void> {
+    throw new Error("Method not implemented.");
+  }
+
+  linkByPK(...pk: any[]): Promise<void> {
+    throw new Error("Method not implemented.");
+  }
+
+  unlink(value: Instance<R>): Promise<void> {
+    throw new Error("Method not implemented.");
+  }
+
+  unlinkByPK(pk: any): Promise<void> {
+    throw new Error("Method not implemented.");
+  }
+
+  unlinkWhere(where: WhereCriterion): Promise<void> {
+    throw new Error("Method not implemented.");
+  }
+
+  unlinkAll(): Promise<void> {
+    throw new Error("Method not implemented");
+  }
+
+  /**
+   * Get related instances and relation instances.
+   * @param {FindOptions} options Search options.
+   * This object should not have join option.
+   * Any other options are permitted.
+   * Note that 'where' option is applied to items of companion table, not the relation table.
+   * To filter results by relation table properties, use relationModelName$relationProp conditions.
+   * For example:
+   * foo.bars.find({ where: { name: 'some name', foobar$relationType: 1 } });
+   * @returns {Promise<FindRelationResult<R, RR>>}
+   */
+  async find(options?: FindOptions): Promise<FindRelationResult<R, RR>> {
+    if (options && options.join != null) {
+      throw new Error('Cannot get list of related items: search options should not have join clause');
+    }
+    if (options && options.hasOwnProperty(this.myForeignKey)) {
+      throw new Error('Cannot get list of related items: search options are invalid');
+    }
+
+    // select ... from relation inner join right on right.id = relation.rightId where right.prop = prop and relation.prop = prop
+
+    let whereRelated: WhereCriterion = {
+      [this.myForeignKey]: this._inst.$rowId
+    };
+    let where: WhereCriterion = Object.assign({}, options ? options.where : {}, whereRelated);
+
+    // we query for items of relation table, and join them with items from companion table.
+    // so result object will have relation instances as result.items and related companion instances as result.joined[some_name]
+    let interResult = await this._d.relationModel.find({
+      where,
+      join: [ { relation: this, type: JoinType.Inner } ],
+      ...options
+    });
+
+    // to transform the result to required form, we should place related companion instances to result.items,
+    // instances of relation table -- to result.relatedItems.
+    // no other joins should be present in result.
+
+    let relatedItems: Instance<any>[] = interResult.joined && interResult.joined[this.name] ? interResult.joined[this.name] : [];
+
+    return {
+      totalCount: interResult.totalCount,
+      items: relatedItems,
+      relationItems: interResult.items
+    };
+  }
+
+  get name(): string { return this._d.name; }
+
+  getJoinCondition(model: Model<any>, companionAlias: string): string {
+    let companionPk = this._d.companionModel.getPrimaryKeyName();
+    if (model === this._d.relationModel) {
+      return `${companionAlias}.${companionPk} = ${model.name}.${this.otherForeignKey}`
+    } else if (model === this._d.model) {
+      let relationName = this._d.relationModel.name;
+      return `${companionAlias}.${companionPk} IN (SELECT ${this.otherForeignKey} FROM ${relationName} WHERE ${this.myForeignKey} = ${this._d.model.name}.${this._d.model.getPrimaryKeyName()}`;
+    } else {
+      throw new Error('Relation.getJoinCondition: invalid model');
+    }
+  }
+
+  get relationData(): RelationFieldData { return this._d; }
+
+  /** Protected area **/
+
+  protected _d: MultiRelationFieldData;
+  protected _inst: DatabaseInstance<T>;
+
+  protected get myForeignKey(): string {
+    return this._d.isLeft ? this._d.leftForeignKey : this._d.rightForeignKey;
+  }
+
+  protected get otherForeignKey(): string {
+    return this._d.isLeft ? this._d.rightForeignKey : this._d.leftForeignKey;
+  }
+}
 
 /**
  * ORM model class.
@@ -160,6 +634,10 @@ export class Model<T> {
     return Object.keys(this._spec).map(key => this._spec[key]) as FieldSpecWrapper[];
   }
 
+  get relations(): RelationFieldData[] {
+    return this._relationFields;
+  }
+
   /**
    * Model name
    * @returns {string} Model name
@@ -206,7 +684,7 @@ export class Model<T> {
   getFieldWrapperChecked(name: string): FieldSpecWrapper {
     let fw = this.getFieldWrapper(name);
     if (fw == null) {
-      throw new Error(`No field named [${fw}] found`);
+      throw new Error(`No field named [${fw}] found. Asked for a field named ${name}, but we have only the following fields: ${this.fields.map(x => x.fieldName)}`);
     }
     return fw;
   }
@@ -264,72 +742,132 @@ export class Model<T> {
    * Creates a new one-to-one relation with another model.
    * Relation is implemented via adding a new field to this model which references an instance of another model.
    * @param {Model<any>} otherModel A model to add the relation to
-   * @param {string} relationField Field which be used to create the relation.
-   * This field will store foreign key value.
-   * If the field does not exists, it will be created.
-   * To make the relation really one-to-one, field will become unique.
-   * @param {string} otherRelationField A field in another model to be used as a foreign key.
-   * You can omit this option, and the primary key of the other model will be used.
-   * Primary key of the other model should be already registered on the other model for it to work.
+   * @param {string} field Field which will be used to access the relation
+   * @param {string} options Relation options
    * @returns {Model<T>} This model
    */
-  oneToOne(otherModel: Model<any>, relationField: string, otherRelationField?: string): Model<T> {
-    return this._oneOrManyToOne(otherModel, relationField, otherRelationField, true);
+  oneToOne(otherModel: Model<any>|string, field?: string|null, options?: SingleRelationOptions): Model<T> {
+    return this._oneOrManyToOne(otherModel, field, options, RelationType.OneToOne);
   }
 
   /**
    * Creates a new many-to-one relation with another model.
    * It works just like one-to-one relation, but relation field is not unique.
    * @param {Model<any>} otherModel A model to add the relation to
-   * @param {string} relationField A field to be used to create the relation.
-   * @param {string} otherRelationField A field in another model to be used as a foreign key.
+   * @param {string} field A field which will be used to access the relation
+   * @param {string} options Relation options
    * @returns {Model<T>} This model
    */
-  manyToOne(otherModel: Model<any>, relationField: string, otherRelationField?: string): Model<T> {
-    return this._oneOrManyToOne(otherModel, relationField, otherRelationField, false);
+  manyToOne(otherModel: Model<any>|string, field?: string|null, options?: SingleRelationOptions): Model<T> {
+    return this._oneOrManyToOne(otherModel, field, options, RelationType.ManyToOne);
   }
 
   /**
    * Creates a new one-to-many relation with another model.
    * Relation is implemented like it would be one-to-many relation on otherModel with this model.
-   * So only otherModel is modified, not the current one.
    * @param {Model<any>} otherModel A model to add the relation to
-   * @param {string} otherRelationField A field to be used to store foreign key.
-   * This field will be added to otherModel, not this one.
-   * @param {string} relationField A field which value will be used as a foreign key.
-   * This should be a field of this model.
+   * @param {string} field A field to be used to access the relation
+   * @param {string} options Relation options
    * @returns {Model<T>} This model
    */
-  oneToMany(otherModel: Model<any>, otherRelationField: string, relationField?: string): Model<T> {
-    return otherModel.oneToOne(this, otherRelationField, relationField);
+  oneToMany(otherModel: Model<any>|string, field?: string|null, options?: SingleRelationOptions): Model<T> {
+    if (typeof otherModel === 'string') {
+      let m = this._db.getModel(otherModel);
+      if (m == null) {
+        throw new Error(`Cannot create relation: no model named [${otherModel}] defined`);
+      }
+      otherModel = m;
+    }
+
+    otherModel._oneOrManyToOne(this, options && options.companionField ? options.companionField : null, {
+      foreignKey: options && options.foreignKey ? options.foreignKey : undefined,
+      companionField: field == null ? undefined : field
+    }, RelationType.OneToMany, true);
+
+    return this;
   }
 
   /**
    * Creates a new many-to-many relation with another model.
    * This relation is implemented by creating a relation table which stores pairs of foreign keys to both models.
    * @param {Model<any>} otherModel A model to add the relation to
-   * @param {Model<any> | string} relationModel A model which will be used as a relation model.
    * If no model with the provided name exist, new one will be created.
    * You can use an existing model to make the relation table have other fields.
-   * @param {string} relationField Name of a field on relationModel which will be used to store foreign key for this model
-   * @param {string} otherRelationField Name of a field on relationModel which will be used to store foreign key for other model
+   * @param field A field to be used to access the relation
+   * @param options Relation options
    * @returns {Model<T>} This model
    */
-  manyToMany(otherModel: Model<any>, relationModel: Model<any>|string, relationField: string, otherRelationField: string): Model<T> {
-    if (typeof relationModel === 'string') {
-      let existingModel = this._db.getModel(relationModel);
-      if (existingModel == null) {
-        relationModel = this._db.define(relationModel, { });
+  manyToMany(otherModel: Model<any>|string, field?: string|null, options?: MultiRelationOptions): Model<T> {
+    // resolve other model
+    if (typeof otherModel === 'string') {
+      let m = this._db.getModel(otherModel);
+      if (m == null) {
+        throw new Error(`Cannot create relation: no model named [${otherModel}] defined`);
+      }
+      otherModel = m;
+    }
+
+    // find model to be used as a relation table
+    let relationModel: Model<any>|null = null;
+    if (options && options.model && typeof options.model !== 'string') {
+      // use provided model for it
+      relationModel = options.model;
+    } else {
+      // create a new model for relation
+      let relModelName: string;
+      if (options && options.model && typeof options.model === 'string') {
+        // if model name is provided, use it
+        relModelName = options.model;
+        let existingRelModel = this._db.getModel(relModelName);
+        if (existingRelModel != null) {
+          relationModel = existingRelModel;
+        }
       } else {
-        relationModel = existingModel;
+        // generate a name for relation model
+        relModelName = this.name + capitalize(otherModel.name);
+      }
+
+      if (relationModel == null) {
+        relationModel = this._db.define(relModelName, { });
       }
     }
 
-    relationModel.updateField(relationField, { typeHint: TypeHint.Integer });
-    relationModel.updateField(otherRelationField, { typeHint: TypeHint.Integer });
-    relationModel.addForeignKeyConstraint(relationField, this, this.getPrimaryKeyName() as string);
-    relationModel.addForeignKeyConstraint(otherRelationField, otherModel, otherModel.getPrimaryKeyName() as string);
-    relationModel.addUniqueConstraint([relationField, otherRelationField]);
+    // initalize relation table, add fields and constraints
+    let leftForeignKey = options && options.leftForeignKey ? options.leftForeignKey : this.name + 'id';
+    let rightForeignKey = options && options.rightForeignKey ? options.rightForeignKey : otherModel.name + 'id';
+
+    relationModel.updateField(leftForeignKey, { typeHint: TypeHint.Integer });
+    relationModel.updateField(rightForeignKey, { typeHint: TypeHint.Integer });
+    relationModel.addForeignKeyConstraint(leftForeignKey, this, this.getPrimaryKeyName());
+    relationModel.addForeignKeyConstraint(rightForeignKey, otherModel, otherModel.getPrimaryKeyName());
+    relationModel.addUniqueConstraint([leftForeignKey, rightForeignKey]);
+
+    // add relation field to manipulate the relation
+    if (field) {
+      this._addRelationField({
+        name: field,
+        type: RelationType.ManyToMany,
+        model: this,
+        companionModel: otherModel,
+        isLeft: true,
+        relationModel,
+        leftForeignKey,
+        rightForeignKey
+      } as MultiRelationFieldData);
+    }
+
+    if (options && options.companionField) {
+      otherModel._addRelationField({
+        name: options.companionField,
+        type: RelationType.ManyToMany,
+        model: otherModel,
+        companionModel: this,
+        isLeft: false,
+        relationModel,
+        leftForeignKey,
+        rightForeignKey
+      } as MultiRelationFieldData);
+    }
 
     return this;
   }
@@ -418,16 +956,19 @@ export class Model<T> {
     }
 
     if (result.$rowId == null) {
-      if (sqlResult[ROWID] == null) {
-        throw new Error(`No rowid database value for an instance of model [${this.name}]`);
+      let qualifiedRowid = this.name + '.' + ROWID;
+      if (!Reflect.has(sqlResult, qualifiedRowid) && !Reflect.has(sqlResult, ROWID)) {
+        throw new Error(`No rowid database value for an instance of model [${this.name}] (tried name ${qualifiedRowid} and ${ROWID})`);
       } else {
-        let rowid = sqlResult[ROWID];
+        let rowid = Reflect.has(sqlResult, ROWID) ? sqlResult[ROWID] : sqlResult[qualifiedRowid];
         if (typeof rowid !== 'number') {
           throw new Error(`Invalid rowid value type for an instance of model [${this.name}]`);
         }
         result.$rowId = rowid;
       }
     }
+
+    result.$created = true;
 
     return this._makeInstance(result);
   }
@@ -439,6 +980,44 @@ export class Model<T> {
    */
   async find(options?: FindOptions): Promise<FindResult<T>> {
     return this._db.find(this, options || {});
+  }
+
+  /**
+   * Updates instances by given criteria, setting specified fields to given values.
+   * @param {UpdateOptions} options Search criteria and options.
+   * 'where' property specified search criteria.
+   * 'set' property lists fields and values that updated instances will have.
+   * For example:
+   * model.update({
+   *   where: { name: 'old name' },
+   *   set: { name: 'new name' }
+   * });
+   * will replace all occupiences of 'old name' with 'new name'
+   * @returns {Promise<void>} Fulfilled when done.
+   */
+  async update(options: UpdateOptions): Promise<void> {
+    return this._db.update(this, options);
+  }
+
+  /**
+   * Removes instances matching given criteria.
+   * @param {RemoveOptions} options Search criteria.
+   * 'where' property specifies search criteria.
+   * You should not call the method without 'where' property to remove all instances of current model.
+   * Such behaviour is prohibited for security purposes.
+   * To remove all instances, explicitly use removeAll function.
+   * @returns {Promise<void>} Fulfilled when done.
+   */
+  async remove(options: RemoveOptions): Promise<void> {
+    return this._db.remove(this, options);
+  }
+
+  /**
+   * Removes all instances of given model from database.
+   * @returns {Promise<void>} Fulfilled when done.
+   */
+  async removeAll(): Promise<void> {
+    return this._db.removeAll(this);
   }
 
   /**
@@ -510,46 +1089,130 @@ export class Model<T> {
   protected _name: string;
   protected _constraints: string[] = [];
   protected _options: ModelOptions;
+  protected _relationFields: RelationFieldData[] = [];
 
-  protected _oneOrManyToOne(otherModel: Model<any>, relationField: string, otherRelationField: string|undefined,
-                            unique: boolean) {
-    if (this.getFieldSpec(relationField) == null) {
-      this.addField(relationField, { typeHint: TypeHint.Integer, unique });
+  protected _oneOrManyToOne(otherModel: Model<any>|string, field: string|null|undefined,
+                            options: SingleRelationOptions|undefined, type: RelationType,
+                            swapLeftRight: boolean = false) {
+    let unique = type === RelationType.OneToOne;
+
+    // resolve model
+    if (typeof otherModel === 'string') {
+      let m = this._db.getModel(otherModel);
+      if (m == null) {
+        throw new Error(`Cannot create a relation: model [${otherModel}] is not defined`);
+      }
+      otherModel = m;
+    }
+
+    // create a column to hold foreign key
+    let foreignKey = options && options.foreignKey ? options.foreignKey : otherModel.name + 'id';
+    if (this.getFieldSpec(foreignKey) == null) {
+      this.addField(foreignKey, { typeHint: TypeHint.Integer, unique });
     } else {
-      this.updateField(relationField, { unique });
+      this.updateField(foreignKey, { unique });
     }
 
-    if (otherRelationField == null) {
-      // try to find a primary key for the other model and link to it
-      otherRelationField = otherModel.getPrimaryKeyName();
+    // create constraint for the foreign key
+    this.addForeignKeyConstraint(foreignKey, otherModel, otherModel.getPrimaryKeyName());
+
+    if (field) {
+      this._addRelationField({
+        name: field,
+        type,
+        model: this,
+        companionModel: otherModel,
+        isLeft: !swapLeftRight,
+        foreignKey
+      } as SingleRelationFieldData);
     }
 
-    this.addForeignKeyConstraint(relationField, otherModel, otherRelationField);
+    if (options && options.companionField) {
+      otherModel._addRelationField({
+        name: options.companionField,
+        type,
+        model: otherModel,
+        companionModel: this,
+        isLeft: swapLeftRight,
+        foreignKey
+      } as SingleRelationFieldData);
+    }
+
     return this;
   }
 
+  protected _checkRelationFieldName(name: string): void {
+    if (!isValidName(name)) {
+      throw new Error(`Cannot create a relation: [${name}] is invalid name for a field`);
+    } else if (this.getFieldSpec(name) != null || this._getRelationFieldData(name) != null) {
+      throw new Error(`Cannot create a relation: field [${name}] is already reserved`);
+    }
+  }
+
+  protected _addRelationField(d: RelationFieldData): void {
+    this._checkRelationFieldName(d.name);
+    this._relationFields.push(d);
+  }
+
+  protected _getRelationFieldData(name: string): RelationFieldData|null {
+    let f = this._relationFields.find(x => x.name === name);
+    return f == null ? null : f;
+  }
+
   protected _makeInstance(inst: DatabaseInstance<T>): Instance<T> {
+    // initialize relations for the instance
+    for (let relation of this._relationFields) {
+      let accesser: Relation;
+      switch (relation.type) {
+        case RelationType.ManyToMany:
+          accesser = new DbMultiRelation(inst, relation as MultiRelationFieldData);
+          break;
+
+        case RelationType.OneToOne:
+          accesser = new DbSingleRelation(inst, relation as SingleRelationFieldData);
+          break;
+
+        case RelationType.ManyToOne:
+          if (relation.isLeft) {
+            accesser = new DbSingleRelation(inst, relation as SingleRelationFieldData);
+          } else {
+            accesser = new DbManyRelation(inst, relation as SingleRelationFieldData);
+          }
+          break;
+
+        case RelationType.OneToMany:
+          if (relation.isLeft) {
+            accesser = new DbManyRelation(inst, relation as SingleRelationFieldData);
+          } else {
+            accesser = new DbSingleRelation(inst, relation as SingleRelationFieldData);
+          }
+          break;
+
+        default:
+          throw new Error('Unexpected relation type');
+      }
+
+      inst.$relations.set(relation.name, accesser);
+    }
+
     return new Proxy(inst, {
       get: function(target: DatabaseInstance<T>, name: string, receiver: any): any {
         if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
           return Reflect.get(target, name, target);
-        } else if (target.$fields.has(name)) {
-          return target.$fields.get(name);
         } else {
-          return undefined;
+          return target.$get(name);
         }
       },
       set: function(target: DatabaseInstance<T>, name: string, value: any, receiver: any): boolean {
         if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
           return Reflect.set(target, name, value, target);
         } else {
-          target.$fields.set(name, value);
-          return true;
+          return target.$set(name, value);
         }
       },
       has: function(target: DatabaseInstance<T>, prop: string): boolean {
         return ((typeof prop !== 'string' || prop.startsWith('$')) && Reflect.has(target, prop)) ||
-            target.$fields.has(prop);
+            target.$has(prop);
       }
     }) as Instance<T>;
   }
@@ -589,6 +1252,7 @@ export interface FieldSpec {
    * Whether null is accepted as a value for the field.
    * It is mapped to `NOT NULL` constraint in sql schema.
    * Note that is `allowNull` is true and value you are going to write into database is null, no validator is called.
+   * By default, allow null is true.
    */
   allowNull?: boolean;
 
@@ -650,17 +1314,19 @@ export class FieldSpecWrapper {
   }
 
   convertToDatabaseForm(value: any): any {
-    if (this.fieldSpec.allowNull && value == null) {
+    let fieldSpec = this.fieldSpec;
+
+    if (fieldSpec.allowNull !== false && value == null) {
       return null;
     }
 
-    if (this.fieldSpec.validate != null) {
-      if (!this.fieldSpec.validate(value)) {
+    if (fieldSpec.validate != null) {
+      if (!fieldSpec.validate(value)) {
         throw new Error(`Invalid value for a property value ${this.fieldName}`);
       }
     }
 
-    return this.fieldSpec.serialize == null ? value : this.fieldSpec.serialize(value);
+    return fieldSpec.serialize == null ? value : fieldSpec.serialize(value);
   }
 
   convertFromDatabaseForm(value: any): any {
@@ -733,16 +1399,29 @@ export interface SortProp {
   caseSensitive?: boolean;
 }
 
-/**
- * Search criteria and options
- */
-export interface FindOptions {
+type WhereCriterion = { [name: string]: any };
+
+export interface QueryOptions {
   /**
    * Search criteria
    */
-  where?: {
-    [name: string]: any
-  },
+  where?: WhereCriterion
+}
+
+export enum JoinType {
+  Inner = 'INNER',
+  Left = 'LEFT'
+}
+
+export interface JoinOption {
+  relation: Relation;
+  type: JoinType;
+}
+
+/**
+ * Search criteria and options
+ */
+export interface FindOptions extends QueryOptions {
   limit?: number;
   offset?: number;
 
@@ -755,18 +1434,40 @@ export interface FindOptions {
    * Sorting options.
    */
   sort?: (SortProp|string)[];
+
+  join?: JoinOption[];
+}
+
+export interface UpdateOptions extends QueryOptions {
+  set: {
+    [name: string]: any
+  }
+}
+
+export interface RemoveOptions extends QueryOptions {
+
+}
+
+interface WhereResult {
+  query: string;
+  bound: any[];
 }
 
 export interface FindResult<T> {
   totalCount?: number|null;
-  items: (Instance<T>)[];
+  items: Instance<T>[];
+  joined?: { [name: string]: Instance<any>[] };
 }
 
-interface QueryOptions {
+export interface FindRelationResult<T, R> extends FindResult<T> {
+  relationItems: Instance<R>[];
+}
+
+interface SqlQueryParams {
   where: string[];
-  constraints: string[];
+  constraints?: string[];
   bound: any[];
-  joins: string[];
+  joins?: string[];
 }
 
 const CHAR_UNDERSCORE = '_'.charCodeAt(0);
@@ -797,6 +1498,9 @@ export class Database {
   define<T>(modelName: string, modelSpec: { [name: string]: FieldSpec }, modelOptions?: ModelOptions): Model<T> {
     if (!isValidName(modelName)) {
       throw new Error(`Cannot define model: [${modelName}] is invalid name for a model`);
+    }
+    if (this.getModel(modelName)) {
+      throw new Error(`Cannot define model: [${modelName}] already defined`);
     }
     let model = new Model<T>(this, modelName, modelSpec, modelOptions);
     this._models.push(model);
@@ -874,7 +1578,13 @@ export class Database {
    * @returns {Promise<void>}
    */
   async flushSchema(): Promise<void> {
-    await this._db.exec(this.createSchema());
+    if (this._schemaFlushed) {
+      throw new Error('Database schema has already been flushed');
+    }
+    let schema = this.createSchema();
+    this._logQuery(schema);
+    await this._db.exec(schema);
+    this._schemaFlushed = true;
   }
 
   /**
@@ -894,7 +1604,7 @@ export class Database {
 
     let valuesPlaceholders = new Array(values.length).fill('?').join(', ');
 
-    let sql = `INSERT INTO ${inst.$model.name} (${columns}) VALUES (${valuesPlaceholders})`;
+    let sql = `INSERT INTO ${inst.$model.name} (${columns.join(', ')}) VALUES (${valuesPlaceholders})`;
     this._logQuery(sql, values);
     let runResult = this._db.prepare(sql).run(values);
 
@@ -955,11 +1665,13 @@ export class Database {
 
     // if no primary key defined explicitly, we should select rowid column too
     if (model.fields.find(x => x.fieldSpec.primaryKey === true) == null) {
-      columns.push(ROWID);
+      columns.push(model.name + '.' + ROWID);
     }
 
     let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
-    let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${q.joins.join(' ')} ${whereClause} ${q.constraints.join(' ')}`;
+    let joins = q.joins == null ? '' : q.joins.join(' ');
+    let constraints = q.constraints == null ? '' : q.constraints.join(' ');
+    let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${joins} ${whereClause} ${constraints}`;
     this._logQuery(sql, q.bound);
     let sqlResults = this._db.prepare(sql).all(q.bound);
 
@@ -971,16 +1683,73 @@ export class Database {
       result.items.push(model.buildFromDatabaseResult(sqlResult));
     }
 
+    // create instances for requested joins
+    if (options.join && options.join.length > 0) {
+      result.joined = {};
+      for (let joinOption of options.join) {
+        let items: Instance<any>[] = (result.joined[joinOption.relation.name] = []);
+        for (let sqlResult of sqlResults) {
+          items.push(joinOption.relation.relationData.companionModel.buildFromDatabaseResult(sqlResult));
+        }
+      }
+    }
+
     if (options.fetchTotalCount === true) {
       // we should run an extra query to get total number of rows without taking limit and offset into account
-      let countConstraints = q.constraints.filter(constr => !constr.startsWith('LIMIT')).join(' ');
-      let countSql = `SELECT COUNT(*) FROM ${model.name} ${q.joins.join(' ')} ${whereClause} ${countConstraints}`;
+      let countConstraints: string = '';
+      if (q.constraints != null) {
+        countConstraints = q.constraints.filter(constr => !constr.startsWith('LIMIT')).join(' ');
+      }
+      let joins = q.joins == null ? '' : q.joins.join(' ');
+      let countSql = `SELECT COUNT(*) FROM ${model.name} ${joins} ${whereClause} ${countConstraints}`;
       this._logQuery(countSql, q.bound);
       let countResult = this._db.prepare(countSql).get(q.bound);
       result.totalCount = countResult['COUNT(*)'] as number;
     }
 
     return result;
+  }
+
+  async update<T>(model: Model<T>, options: UpdateOptions): Promise<void> {
+    let q = this._simpleOptionsToQuery(model, options);
+
+    let columns = Object.keys(options.set);
+    if (columns.length === 0) {
+      // nothing to update
+      return;
+    }
+
+    let bound: any[] = columns.map(
+      col => model.getFieldWrapperChecked(col).convertToDatabaseForm(options.set[col])
+    );
+    bound.push(...q.bound);
+
+    let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
+    let placeholders = columns.map(col => col + ' = ?');
+    let sql = `UPDATE ${model.name} SET ${placeholders} ${whereClause}`;
+    this._logQuery(sql, bound);
+
+    let res = await this._db.prepare(sql).run(bound);
+  }
+
+  async remove<T>(model: Model<T>, options: RemoveOptions): Promise<void> {
+    let q = this._simpleOptionsToQuery(model, options);
+
+    if (!q.where || q.where.length === 0) {
+      throw new Error('Attempted to call Model.remove without search criteria. To remove all instances, use Model.removeAll');
+    }
+
+    let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
+    let sql = `DELETE FROM ${model.name} ${whereClause}`;
+
+    this._logQuery(sql, q.bound);
+    await this._db.prepare(sql).run(q.bound);
+  }
+
+  async removeAll<T>(model: Model<T>): Promise<void> {
+    let sql = `DELETE FROM ${model.name}`;
+    this._logQuery(sql);
+    await this._db.prepare(sql).run();
   }
 
   async count(model: Model<any>): Promise<number> {
@@ -1021,6 +1790,7 @@ export class Database {
 
   protected _db: sqlite;
   protected _models: Model<any>[] = [];
+  protected _schemaFlushed: boolean = false;
 
   protected constructor(db: sqlite) {
     this._db = db;
@@ -1030,23 +1800,11 @@ export class Database {
     console.log('Q:', query, bound == null ? '' : bound);
   }
 
-  protected _findOptionsToQuery<T>(model: Model<T>, options: FindOptions): QueryOptions {
-    let q: QueryOptions = {
-      where: [],
-      constraints: [],
-      joins: [],
-      bound: []
-    };
-
-    interface WhereResult {
-      query: string;
-      bound: any[];
-    }
-
+  protected _whereToQuery<T>(model: Model<T>, whereClause: { [name: string]: any }): SqlQueryParams {
     const expectPlain = (value: any): void => {
       let type = typeof value;
       if (['string', 'number', 'boolean'].indexOf(type) < 0 && value != null) {
-        throw new Error('Plain value expected, but got [' + Object.toString.call(value) + ']');
+        throw new Error('Plain value expected, but got this: ' + value);
       }
     };
 
@@ -1078,7 +1836,7 @@ export class Database {
         }
       } else {
         // just a value
-        if (typeof root === 'object') {
+        if (typeof root === 'object' && root != null) {
           // if it is object, we should inspect it for operators
           let conditions: string[] = [];
           for (let opkey of Object.keys(root)) {
@@ -1103,10 +1861,13 @@ export class Database {
     };
 
     const handleMappedOperator = (mapped: string, left: string, right: any): WhereResult => {
-      expectPlain(right);
+      let fsw = model.getFieldWrapperChecked(left);
+      let rightConverted = fsw.convertToDatabaseForm(right);
+
+      expectPlain(rightConverted);
       return {
         query: left + ' ' + mapped + ' ?',
-        bound: [right]
+        bound: [rightConverted]
       };
     };
 
@@ -1139,19 +1900,66 @@ export class Database {
       throw new Error(`Invalid operator [${operator}]`);
     };
 
-    if (options.where != null) {
-      for (let key of Object.keys(options.where)) {
-        let wr = handleWhere(key, options.where[key]);
-        q.where.push(wr.query);
-        q.bound.push(...wr.bound);
-      }
+    let q: SqlQueryParams = {
+      where: [],
+      bound: []
+    };
+
+    for (let key of Object.keys(whereClause)) {
+      let wr = handleWhere(key, whereClause[key]);
+      q.where.push(wr.query);
+      q.bound.push(...wr.bound);
     }
 
+    return q;
+  }
+
+  protected _simpleOptionsToQuery<T>(model: Model<T>, options: QueryOptions): SqlQueryParams {
+    let q: SqlQueryParams = {
+      where: [],
+      constraints: [],
+      joins: [],
+      bound: []
+    };
+
+    if (options.where != null) {
+      q = Object.assign(q, this._whereToQuery(model, options.where));
+    }
+
+    return q;
+  }
+
+  protected _findOptionsToQuery<T>(model: Model<T>, options: FindOptions): SqlQueryParams {
+    let q: SqlQueryParams = {
+      where: [],
+      constraints: [],
+      joins: [],
+      bound: []
+    };
+
+    if (options.where != null) {
+      q = Object.assign(q, this._whereToQuery(model, options.where));
+    }
+
+    const addConstraint = (cr: string): void => {
+      if (q.constraints == null) {
+        q.constraints = [];
+      }
+      q.constraints.push(cr);
+    };
+
+    const addJoin = (j: string): void => {
+      if (q.joins == null) {
+        q.joins = [];
+      }
+      q.joins.push(j);
+    };
+
     if (options.limit != null) {
-      q.constraints.push('LIMIT ' + options.limit);
+      addConstraint('LIMIT ' + options.limit);
     }
     if (options.offset != null) {
-      q.constraints.push('OFFSET ' + options.offset);
+      addConstraint('OFFSET ' + options.offset);
     }
 
     let sortParts: string[] = [];
@@ -1192,7 +2000,16 @@ export class Database {
     }
 
     if (sortParts.length > 0) {
-      q.constraints.push('ORDER BY ' + sortParts.join(', '));
+      addConstraint('ORDER BY ' + sortParts.join(', '));
+    }
+
+    // process joins
+    if (options.join && options.join.length > 0) {
+      for (let joinOption of options.join) {
+        let rd = joinOption.relation.relationData;
+        let cond = joinOption.relation.getJoinCondition(model, rd.name);
+        addJoin(`${joinOption.type} JOIN ${rd.companionModel.name} AS ${rd.name} ON ${cond}`);
+      }
     }
 
     return q;

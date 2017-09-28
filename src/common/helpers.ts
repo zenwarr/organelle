@@ -223,3 +223,11 @@ export function isAlphaCode(ch: number): boolean {
 export function isDigitCode(ch: number): boolean {
   return ch >= '0'.charCodeAt(0) && ch <= '9'.charCodeAt(0);
 }
+
+export function capitalize(input: string): string {
+  if (input.length === 0) {
+    return input;
+  } else {
+    return input.charAt(0).toUpperCase() + input.slice(1);
+  }
+}
