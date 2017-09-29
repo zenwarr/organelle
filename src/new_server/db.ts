@@ -244,6 +244,7 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
    * @returns {Promise<Instance<R>>} Linked instance or null if no instance linked.
    */
   async get(): Promise<Instance<R>|null> {
+    this._ensureGood();
     if (!this._isCompanion) {
       // just find a companion instance by its primary key
       let fk = this._inst.$get(this._d.foreignKey);
@@ -268,13 +269,7 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
    * @returns {Promise<void>} Fulfilled when done
    */
   async link(related: Instance<R>): Promise<void> {
-    if (!related.$created || related.$rowId == null) {
-      throw new Error('Cannot create a relation: primary key undefined or instance has not been flushed');
-    }
-    if (related.$model != this._d.companionModel) {
-      throw new Error('Cannot create a relation: an instance given has incorrect model');
-    }
-
+    this._ensureRelatedInstancesGood([related], this._d.companionModel);
     return this.linkByPK(related.$rowId);
   }
 
@@ -284,10 +279,7 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
    * @returns {Promise<void>} Fulfilled when done
    */
   async linkByPK(pk: any): Promise<void> {
-    if (pk == null) {
-      throw new Error('Cannot create relation: primary key is undefined');
-    }
-
+    this._ensureRelatedPksGood([pk]);
     if (!this._isCompanion) {
       // just set our foreign key to the primary key of an item we want to link
       this._inst.$set(this._d.foreignKey, pk);
@@ -309,6 +301,8 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
    * @returns {Promise<void>} Fulfilled when done
    */
   async unlink(): Promise<void> {
+    this._ensureGood();
+
     if (!this._isCompanion) {
       this._inst.$set(this._d.foreignKey, null);
       return this._inst.$flush([ this._d.foreignKey ]);
