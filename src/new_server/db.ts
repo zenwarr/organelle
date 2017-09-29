@@ -1768,7 +1768,7 @@ export class Database {
       columns.push(...q.extraColumns);
     }
 
-    let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
+    let whereClause: string = this._makeWhere(q.where);
     let joins = q.joins == null ? '' : q.joins.join(' ');
     let constraints = q.constraints == null ? '' : q.constraints.join(' ');
     let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${joins} ${whereClause} ${constraints}`;
@@ -1822,7 +1822,7 @@ export class Database {
         col => col + ' = ' + q.bound.bind(model.getFieldWrapperChecked(col).convertToDatabaseForm(options.set[col]))
     ).join(', ');
 
-    let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
+    let whereClause = this._makeWhere(q.where);
     let sql = `UPDATE ${model.name} SET ${setClause} ${whereClause}`;
     let res = await this._prepare(sql, q.bound).run();
   }
@@ -1834,7 +1834,7 @@ export class Database {
       throw new Error('Attempted to call Model.remove without search criteria. To remove all instances, use Model.removeAll');
     }
 
-    let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
+    let whereClause = this._makeWhere(q.where);
     let sql = `DELETE FROM ${model.name} ${whereClause}`;
 
     await this._prepare(sql, q.bound).run();
@@ -2148,5 +2148,15 @@ export class Database {
     }
 
     return columns;
+  }
+
+  protected _makeWhere(where: string[]|null|undefined): string {
+      if (!where || where.length === 0) {
+      return '';
+    } else if (where.length === 1) {
+      return 'WHERE ' + where[0];
+    } else {
+      return 'WHERE ' + where.map(x => '(' + x + ')').join(' AND ');
+    }
   }
 }
