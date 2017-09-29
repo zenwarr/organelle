@@ -148,10 +148,12 @@ export interface SingleRelation<T, R> extends Relation {
 }
 
 export interface MultiRelation<T, R, RR> extends Relation {
-  link(...value: Instance<R>[]): Promise<void>;
-  linkByPK(...pk: any[]): Promise<void>;
-  unlink(value: Instance<R>): Promise<void>;
-  unlinkByPK(pk: any): Promise<void>;
+  linkUsing(value: Instance<R>, relationTemplate: { [name: string]: any }): Promise<void>;
+  link(...values: Instance<R>[]): Promise<void>;
+  linkByPKUsing(pk: any, relationTemplate: { [name: string]: any }): Promise<void>;
+  linkByPK(...pks: any[]): Promise<void>;
+  unlink(...values: Instance<R>[]): Promise<void>;
+  unlinkByPK(...pks: any[]): Promise<void>;
   unlinkWhere(where: WhereCriterion): Promise<void>;
   unlinkAll(): Promise<void>;
   find(options?: FindOptions): Promise<FindRelationResult<R, RR>>;
@@ -194,15 +196,46 @@ interface MultiRelationFieldData extends RelationFieldData {
   rightForeignKey: string;
 }
 
+class DbRelation<T> {
+  constructor(inst: DatabaseInstance<T>) {
+    this._inst = inst;
+  }
+
+  protected _ensureGood(): void {
+    if (this._inst.$rowId == null || !this._inst.$created) {
+      throw new InstanceInvalidError();
+    }
+  }
+
+  protected _ensureRelatedInstancesGood(instances: DatabaseInstance<any>[], expectedModel: Model<any>): void {
+    for (let inst of instances) {
+      if (!inst.$created || inst.$rowId == null) {
+        throw new InstanceInvalidError();
+      }
+      if (inst.$model !== expectedModel) {
+        throw new ModelMismatchError();
+      }
+    }
+  }
+
+  protected _ensureRelatedPksGood(pks: any[]): void {
+
+  }
+
+  /** Protected area **/
+
+  protected _inst: DatabaseInstance<T>;
+}
+
 /**
  * Handles one-to-one relationships for both sides, many-to-one for left side and one-to-many for right side.
  * In all cases, the model that has DbSingleRelation attached, stores primary key value of companion model.
  * A single exception is one-to-one relationship where DbSingleRelation is attached to right side model.
  * In this case isCompanion flag is true, and its companion model stores the primary key of the current model.
  */
-class DbSingleRelation<T, R> implements SingleRelation<T, R> {
+class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, R> {
   constructor(inst: DatabaseInstance<T>, d: SingleRelationFieldData) {
-    this._inst = inst;
+    super(inst);
     this._d = d;
   }
 
@@ -310,7 +343,6 @@ class DbSingleRelation<T, R> implements SingleRelation<T, R> {
 
   /** Protected area **/
 
-  protected _inst: DatabaseInstance<T>;
   protected _d: SingleRelationFieldData;
 
   protected get _isCompanion(): boolean {
@@ -334,9 +366,9 @@ class InstanceInvalidError extends Error {
  * Handles one-to-many for left side and many-to-one for right side.
  * In all cases, the companion model stores primary indexes of instances of this model and this primary key can be repeated.
  */
-class DbManyRelation<T, R> implements MultiRelation<T, R, void> {
+class DbManyRelation<T, R> extends DbRelation<T> implements MultiRelation<T, R, void> {
   constructor(inst: DatabaseInstance<T>, d: SingleRelationFieldData) {
-    this._inst = inst;
+    super(inst);
     this._d = d;
   }
 
@@ -344,59 +376,56 @@ class DbManyRelation<T, R> implements MultiRelation<T, R, void> {
 
   async link(...instances: Instance<R>[]): Promise<void> {
     this._ensureGood();
-    for (let inst of instances) {
-      if (!inst.$created || inst.$rowId == null || inst.$model !== this._d.companionModel) {
-        throw new InstanceInvalidError();
-      }
-      if (inst.$model !== this._d.companionModel) {
-        throw new ModelMismatchError();
-      }
-      await this.linkByPK(inst.$rowId);
-    }
+    this._ensureRelatedInstancesGood(instances, this._d.companionModel);
+
+    return this.linkByPK(...instances.map(x => x.$rowId));
   }
 
   async linkByPK(...pks: any[]): Promise<void> {
     this._ensureGood();
-    for (let pk of pks) {
-      if (pk == null) {
-        throw new InstanceInvalidError();
-      }
-      await this._d.companionModel.update({
-        where: {
-          [this._d.companionModel.getPrimaryKeyName()]: pk
-        },
-        set: {
-          [this._d.foreignKey]: this._inst.$rowId
+    this._ensureRelatedPksGood(pks);
+
+    await this._d.companionModel.update({
+      where: {
+        [this._d.companionModel.getPrimaryKeyName()]: {
+          $in: pks
         }
-      });
-    }
+      },
+      set: {
+        [this._d.foreignKey]: this._inst.$rowId
+      }
+    });
   }
 
-  async unlink(value: Instance<R>): Promise<void> {
-    this._ensureGood();
-    if (value == null || !value.$created || value.$rowId == null) {
-      throw new InstanceInvalidError();
-    }
-    if (value.$model !== this._d.companionModel) {
-      throw new ModelMismatchError();
-    }
-    return this.unlinkByPK(value.$rowId);
+  linkUsing(value: Instance<R>, relationTemplate: { [p: string]: any }): Promise<void> {
+    return this.link(value);
   }
 
-  async unlinkByPK(pk: any): Promise<void> {
+  linkByPKUsing(pk: any, relationTemplate: { [p: string]: any }): Promise<void> {
+    return this.linkByPK(pk);
+  }
+
+  async unlink(...values: Instance<R>[]): Promise<void> {
     this._ensureGood();
-    if (pk == null) {
-      throw new InstanceInvalidError();
-    }
+    this._ensureRelatedInstancesGood(values, this._d.companionModel);
+
+    return this.unlinkByPK(...values.map(x => x.$rowId));
+  }
+
+  async unlinkByPK(...pks: any[]): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedPksGood(pks);
 
     return this._d.companionModel.update({
       where: {
-        [this._d.companionModel.getPrimaryKeyName()]: pk
+        [this._d.companionModel.getPrimaryKeyName()]: {
+          $in: pks
+        }
       },
       set: {
         [this._d.foreignKey]: null
       }
-    })
+    });
   }
 
   async unlinkWhere(where: WhereCriterion): Promise<void> {
@@ -447,48 +476,97 @@ class DbManyRelation<T, R> implements MultiRelation<T, R, void> {
 
   /** Protected area **/
 
-  protected _inst: DatabaseInstance<T>;
   protected _d: SingleRelationFieldData;
-
-  protected _ensureGood(): void {
-    if (this._inst.$rowId == null || !this._inst.$created) {
-      throw new InstanceInvalidError();
-    }
-  }
 }
 
 /**
  * Handles both sides for many-to-many relation.
  * This relation is implemented through extra table that stores primary keys for both models.
  */
-class DbMultiRelation<T, R, RR> implements MultiRelation<T, R, RR> {
+class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T, R, RR> {
   constructor(inst: DatabaseInstance<T>, rd: MultiRelationFieldData) {
+    super(inst);
     this._d = rd;
-    this._inst = inst;
   }
 
-  link(...value: Instance<R>[]): Promise<void> {
-    throw new Error("Method not implemented.");
+  async link(...values: Instance<R>[]): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedInstancesGood(values, this._d.companionModel);
+
+    return this.linkByPK(...values.map(x => x.$rowId));
   }
 
-  linkByPK(...pk: any[]): Promise<void> {
-    throw new Error("Method not implemented.");
+  linkUsing(value: Instance<R>, relationTemplate: { [p: string]: any }): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedInstancesGood([value], this._d.companionModel);
+
+    return this.linkByPKUsing(value.$rowId, relationTemplate);
   }
 
-  unlink(value: Instance<R>): Promise<void> {
-    throw new Error("Method not implemented.");
+  async linkByPK(...pks: any[]): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedPksGood(pks);
+
+    for (let pk of pks) {
+      let newRelation = this._d.relationModel.build({
+        [this.myForeignKey]: this._inst.$rowId,
+        [this.otherForeignKey]: pk
+      });
+      await newRelation.$flush();
+    }
   }
 
-  unlinkByPK(pk: any): Promise<void> {
-    throw new Error("Method not implemented.");
+  linkByPKUsing(pk: any, relationTemplate: { [p: string]: any }): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedPksGood([pk]);
+
+    let newRelation = this._d.relationModel.build(Object.assign({}, relationTemplate, {
+      [this.myForeignKey]: this._inst.$rowId,
+      [this.otherForeignKey]: pk
+    }));
+    return newRelation.$flush();
   }
 
-  unlinkWhere(where: WhereCriterion): Promise<void> {
-    throw new Error("Method not implemented.");
+  async unlink(...values: Instance<R>[]): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedInstancesGood(values, this._d.companionModel);
+
+    return this.unlinkByPK(values.map(x => x.$rowId));
   }
 
-  unlinkAll(): Promise<void> {
-    throw new Error("Method not implemented");
+  async unlinkByPK(...pks: any[]): Promise<void> {
+    this._ensureGood();
+    this._ensureRelatedPksGood(pks);
+
+    return this._d.relationModel.remove({
+      where: {
+        [this.myForeignKey]: this._inst.$rowId,
+        [this.otherForeignKey]: {
+          $in: pks
+        }
+      }
+    });
+  }
+
+  async unlinkWhere(where: WhereCriterion): Promise<void> {
+    this._ensureGood();
+
+    let crit: WhereCriterion = Object.assign({}, where);
+    crit[this.myForeignKey] = this._inst.$rowId;
+
+    return this._d.relationModel.remove({
+      where: crit
+    });
+  }
+
+  async unlinkAll(): Promise<void> {
+    this._ensureGood();
+
+    return this._d.relationModel.remove({
+      where: {
+        [this.myForeignKey]: this._inst.$rowId
+      }
+    });
   }
 
   /**
@@ -557,7 +635,6 @@ class DbMultiRelation<T, R, RR> implements MultiRelation<T, R, RR> {
   /** Protected area **/
 
   protected _d: MultiRelationFieldData;
-  protected _inst: DatabaseInstance<T>;
 
   protected get myForeignKey(): string {
     return this._d.isLeft ? this._d.leftForeignKey : this._d.rightForeignKey;
@@ -937,17 +1014,19 @@ export class Model<T> {
    * Creates an instance from database query result.
    * Should not by used by end user.
    * @param {{[p: string]: any}} sqlResult Sql result
+   * @param {string} prefix Table prefix for instance data
    * @returns {Instance<T>} Created instance
    */
-  buildFromDatabaseResult(sqlResult: { [name: string]: any }): Instance<T> {
+  buildFromDatabaseResult(sqlResult: { [name: string]: any }, prefix?: string): Instance<T> {
     let result = new DatabaseInstance(this._db, this);
     for (let field of this.fields) {
       let value: any;
+      let fieldName = prefix ? prefix + '.' + field.fieldName : field.fieldName;
 
-      if (sqlResult.hasOwnProperty(field.fieldName)) {
-        result.$fields.set(field.fieldName, value = field.convertFromDatabaseForm(sqlResult[field.fieldName]));
+      if (sqlResult.hasOwnProperty(fieldName)) {
+        result.$fields.set(field.fieldName, value = field.convertFromDatabaseForm(sqlResult[fieldName]));
       } else {
-        throw new Error(`No database value for field [${field.fieldName}] of model [${this.name}]`);
+        throw new Error(`No database value for field [${fieldName}] of model [${this.name}]. Result dump: ${sqlResult}`);
       }
 
       if (field.fieldSpec.primaryKey) {
@@ -1494,6 +1573,7 @@ interface SqlQueryParams {
   constraints?: string[];
   bound: SqlBoundParams;
   joins?: string[];
+  extraColumns?: string[];
 }
 
 const CHAR_UNDERSCORE = '_'.charCodeAt(0);
@@ -1682,11 +1762,10 @@ export class Database {
   async find<T>(model: Model<T>, options: FindOptions): Promise<FindResult<T>> {
     let q = this._findOptionsToQuery(model, options);
 
-    let columns: string[] = model.fields.map(field => field.fieldName);
-
-    // if no primary key defined explicitly, we should select rowid column too
-    if (model.fields.find(x => x.fieldSpec.primaryKey === true) == null) {
-      columns.push(model.name + '.' + ROWID);
+    // build list of columns we should fetch from database
+    let columns: string[] = this._makeColumnListForModel(model);
+    if (q.extraColumns != null) {
+      columns.push(...q.extraColumns);
     }
 
     let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
@@ -1709,7 +1788,8 @@ export class Database {
       for (let joinOption of options.join) {
         let items: Instance<any>[] = (result.joined[joinOption.relation.name] = []);
         for (let sqlResult of sqlResults) {
-          items.push(joinOption.relation.relationData.companionModel.buildFromDatabaseResult(sqlResult));
+          let joinedModel = joinOption.relation.relationData.companionModel;
+          items.push(joinedModel.buildFromDatabaseResult(sqlResult, joinOption.relation.name));
         }
       }
     }
@@ -1816,7 +1896,7 @@ export class Database {
     const expectPlain = (value: any): void => {
       let type = typeof value;
       if (['string', 'number', 'boolean'].indexOf(type) < 0 && value != null) {
-        throw new Error('Plain value expected, but got this: ' + value);
+        throw new Error('Plain value expected, but got this: ' + value + ' of type ' + type);
       }
     };
 
@@ -1901,15 +1981,17 @@ export class Database {
         return handleMappedOperator(mappedOperators.get(operator.toLowerCase()) as string, left, right);
       } else if (operator === '$in' || operator === '$notin') {
         // we expect a list of values here
-        let bound = new SqlBoundParams();
-
-        let list = (right as any[]).map(x => bound.bind(model.getFieldWrapperChecked(left).convertToDatabaseForm(x)));
-        let mapped = operator === '$in' ? 'IN' : 'NOT IN';
-
-        return {
-          query: left + ' ' + mapped + '(' + list.join(', ') + ')',
-          bound
-        };
+        if (right.length === 1) {
+          return handleMappedOperator(mappedOperators.get(operator === '$in' ? '$eq' : '$ne') as string, left, right[0]);
+        } else {
+          let bound = new SqlBoundParams();
+          let list = (right as any[]).map(x => bound.bind(model.getFieldWrapperChecked(left).convertToDatabaseForm(x)));
+          let mapped = operator === '$in' ? 'IN' : 'NOT IN';
+          return {
+            query: left + ' ' + mapped + ' (' + list.join(', ') + ')',
+            bound
+          };
+        }
       }
 
       throw new Error(`Invalid operator [${operator}]`);
@@ -1932,8 +2014,6 @@ export class Database {
   protected _simpleOptionsToQuery<T>(model: Model<T>, options: QueryOptions): SqlQueryParams {
     let q: SqlQueryParams = {
       where: [],
-      constraints: [],
-      joins: [],
       bound: new SqlBoundParams()
     };
 
@@ -1947,8 +2027,6 @@ export class Database {
   protected _findOptionsToQuery<T>(model: Model<T>, options: FindOptions): SqlQueryParams {
     let q: SqlQueryParams = {
       where: [],
-      constraints: [],
-      joins: [],
       bound: new SqlBoundParams()
     };
 
@@ -2023,9 +2101,16 @@ export class Database {
     // process joins
     if (options.join && options.join.length > 0) {
       for (let joinOption of options.join) {
+        // generate and join sql for joining a table
         let rd = joinOption.relation.relationData;
         let cond = joinOption.relation.getJoinCondition(model, rd.name);
         addJoin(`${joinOption.type} JOIN ${rd.companionModel.name} AS ${rd.name} ON ${cond}`);
+
+        // and we should add extra columns to select joined items as well.
+        if (q.extraColumns == null) {
+          q.extraColumns = [];
+        }
+        q.extraColumns.push(...this._makeColumnListForModel(rd.companionModel, rd.name));
       }
     }
 
@@ -2045,5 +2130,23 @@ export class Database {
       return prepared.bind(bindings instanceof SqlBoundParams ? bindings.sqlBindings : bindings);
     }
     return prepared;
+  }
+
+  protected _makeColumnListForModel(model: Model<any>, prefix?: string): string[] {
+    let columns: string[] = model.fields.map(fsw => {
+      if (prefix) {
+        let colName = prefix + '.' + fsw.fieldName;
+        return `${colName} AS "${colName}"`;
+      } else {
+        return fsw.fieldName;
+      }
+    });
+
+    if (model.fields.find(x => x.fieldSpec.primaryKey === true) == null) {
+      let colName = model.name + '.' + ROWID;
+      columns.push(`${colName} AS "${colName}"`);
+    }
+
+    return columns;
   }
 }

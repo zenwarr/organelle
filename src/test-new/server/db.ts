@@ -862,5 +862,78 @@ describe('Database', function() {
       let foo1 = await fooModel.findByPKChecked(1);
       expect((await foo1.bars.find()).items).to.have.lengthOf(0);
     });
+
+    it("should link two instances", async function () {
+      let foo = await fooModel.findByPKChecked(1);
+      await foo.bars.linkByPK(10);
+
+      let foo_ = await fooModel.findByPKChecked(1);
+      let res1 = await foo_.bars.find();
+      expect(res1.items).to.have.lengthOf(1);
+      expect(res1.items[0]).to.have.property('id', 10);
+      expect(res1.relationItems).to.have.lengthOf(1);
+
+      let bar_ = await barModel.findByPKChecked(10);
+      let res2 = await bar_.foes.find();
+      expect(res2.items).to.have.lengthOf(1);
+      expect(res2.items[0]).to.have.property('id', 1);
+      expect(res2.relationItems).to.have.lengthOf(1);
+    });
+
+    it("should unlink instances", async function () {
+      let foo = await fooModel.findByPKChecked(1);
+      await foo.bars.linkByPK(10, 20);
+
+      expect((await foo.bars.find()).items).to.have.lengthOf(2);
+
+      await foo.bars.unlinkByPK(10);
+
+      let res = await foo.bars.find();
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.relationItems).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 20);
+    });
+
+    it("should like instance and relation fields", async function () {
+      let foo = await fooModel.findByPKChecked(1);
+      await foo.bars.linkByPKUsing(10, {
+        relationType: 55
+      });
+
+      let res = await foo.bars.find();
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 10);
+
+      expect(res.relationItems).to.have.lengthOf(1);
+      expect(res.relationItems[0]).to.have.property('relationType', 55);
+    });
+
+    it("should unlink items matching criteria", async function () {
+      let foo = await fooModel.findByPKChecked(1);
+      await foo.bars.linkByPKUsing(10, {
+        relationType: 55
+      });
+      await foo.bars.linkByPKUsing(20, {
+        relationType: 66
+      });
+
+      let res = await foo.bars.find();
+
+      expect(res.items).to.have.lengthOf(2);
+      expect(res.relationItems).to.have.lengthOf(2);
+
+      await foo.bars.unlinkWhere({
+        relationType: 66
+      });
+
+      res = await foo.bars.find();
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 10);
+
+      expect(res.relationItems).to.have.lengthOf(1);
+      expect(res.relationItems[0]).to.have.property('relationType', 55);
+    });
   });
 });
