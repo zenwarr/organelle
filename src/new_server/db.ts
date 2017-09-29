@@ -1450,7 +1450,7 @@ export interface RemoveOptions extends QueryOptions {
 
 interface WhereResult {
   query: string;
-  bound: any[];
+  bound: SqlBoundParams;
 }
 
 export interface FindResult<T> {
@@ -1463,10 +1463,36 @@ export interface FindRelationResult<T, R> extends FindResult<T> {
   relationItems: Instance<R>[];
 }
 
+type SqlBindings = { [name: string]: any };
+
+class SqlBoundParams {
+  static uniqueName(): string {
+    return 'uniq_' + Math.floor(Math.random() * 100000);
+  }
+
+  bind(value: any): string {
+    let bindingName = SqlBoundParams.uniqueName();
+    this._bound[bindingName] = value;
+    return ':' + bindingName;
+  }
+
+  merge(another: SqlBoundParams): void {
+    Object.assign(this._bound, another._bound);
+  }
+
+  get count(): number { return Object.keys(this._bound).length; }
+
+  get sqlBindings(): SqlBindings { return this._bound; }
+
+  /** Protected area **/
+
+  protected _bound: SqlBindings = {};
+}
+
 interface SqlQueryParams {
   where: string[];
   constraints?: string[];
-  bound: any[];
+  bound: SqlBoundParams;
   joins?: string[];
 }
 
@@ -1582,7 +1608,6 @@ export class Database {
       throw new Error('Database schema has already been flushed');
     }
     let schema = this.createSchema();
-    this._logQuery(schema);
     await this._db.exec(schema);
     this._schemaFlushed = true;
   }
@@ -1605,8 +1630,7 @@ export class Database {
     let valuesPlaceholders = new Array(values.length).fill('?').join(', ');
 
     let sql = `INSERT INTO ${inst.$model.name} (${columns.join(', ')}) VALUES (${valuesPlaceholders})`;
-    this._logQuery(sql, values);
-    let runResult = this._db.prepare(sql).run(values);
+    let runResult = this._prepare(sql, values).run();
 
     // if we have a field for a primary key, but it is not specified explicitly, we should set it now
     let pkName = inst.$model.getPrimaryKeyName();
@@ -1639,9 +1663,7 @@ export class Database {
     values.push(inst.$rowId);
 
     let sql = `UPDATE ${inst.$model.name} SET ${placeholders} WHERE ${pk} = ?`;
-    this._logQuery(sql, values);
-
-    this._db.prepare(sql).run(values);
+    await this._prepare(sql, values).run();
   }
 
   async removeInstance(inst: DatabaseInstance<any>): Promise<void> {
@@ -1654,8 +1676,7 @@ export class Database {
     let sql = `DELETE FROM ${inst.$model.name} WHERE ${pk} = ?`;
     let values = [inst.$rowId];
 
-    this._logQuery(sql, values);
-    this._db.prepare(sql).run(values);
+    await this._prepare(sql, values).run();
   }
 
   async find<T>(model: Model<T>, options: FindOptions): Promise<FindResult<T>> {
@@ -1672,8 +1693,7 @@ export class Database {
     let joins = q.joins == null ? '' : q.joins.join(' ');
     let constraints = q.constraints == null ? '' : q.constraints.join(' ');
     let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${joins} ${whereClause} ${constraints}`;
-    this._logQuery(sql, q.bound);
-    let sqlResults = this._db.prepare(sql).all(q.bound);
+    let sqlResults = this._prepare(sql, q.bound).all();
 
     let result: FindResult<T> = {
       totalCount: null,
@@ -1702,8 +1722,7 @@ export class Database {
       }
       let joins = q.joins == null ? '' : q.joins.join(' ');
       let countSql = `SELECT COUNT(*) FROM ${model.name} ${joins} ${whereClause} ${countConstraints}`;
-      this._logQuery(countSql, q.bound);
-      let countResult = this._db.prepare(countSql).get(q.bound);
+      let countResult = this._prepare(countSql, q.bound).get();
       result.totalCount = countResult['COUNT(*)'] as number;
     }
 
@@ -1719,17 +1738,13 @@ export class Database {
       return;
     }
 
-    let bound: any[] = columns.map(
-      col => model.getFieldWrapperChecked(col).convertToDatabaseForm(options.set[col])
-    );
-    bound.push(...q.bound);
+    let setClause: string = columns.map(
+        col => col + ' = ' + q.bound.bind(model.getFieldWrapperChecked(col).convertToDatabaseForm(options.set[col]))
+    ).join(', ');
 
     let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
-    let placeholders = columns.map(col => col + ' = ?');
-    let sql = `UPDATE ${model.name} SET ${placeholders} ${whereClause}`;
-    this._logQuery(sql, bound);
-
-    let res = await this._db.prepare(sql).run(bound);
+    let sql = `UPDATE ${model.name} SET ${setClause} ${whereClause}`;
+    let res = await this._prepare(sql, q.bound).run();
   }
 
   async remove<T>(model: Model<T>, options: RemoveOptions): Promise<void> {
@@ -1742,20 +1757,17 @@ export class Database {
     let whereClause = q.where && q.where.length > 0 ? 'WHERE ' + q.where.map(x => '(' + x + ')').join(' AND ') : '';
     let sql = `DELETE FROM ${model.name} ${whereClause}`;
 
-    this._logQuery(sql, q.bound);
-    await this._db.prepare(sql).run(q.bound);
+    await this._prepare(sql, q.bound).run();
   }
 
   async removeAll<T>(model: Model<T>): Promise<void> {
     let sql = `DELETE FROM ${model.name}`;
-    this._logQuery(sql);
-    await this._db.prepare(sql).run();
+    await this._prepare(sql).run();
   }
 
   async count(model: Model<any>): Promise<number> {
     let sql = `SELECT COUNT(*) FROM ${model.name}`;
-    this._logQuery(sql);
-    return this._db.prepare(sql).get()['COUNT(*)'] as number;
+    return this._prepare(sql).get()['COUNT(*)'] as number;
   }
 
   /**
@@ -1796,8 +1808,8 @@ export class Database {
     this._db = db;
   }
 
-  protected _logQuery(query: string, bound?: any[]): void {
-    console.log('Q:', query, bound == null ? '' : bound);
+  protected _logQuery(query: string, bound?: SqlBoundParams|any[]): void {
+    console.log('Q:', query, bound == null ? '' : (bound instanceof SqlBoundParams ? bound.sqlBindings : bound));
   }
 
   protected _whereToQuery<T>(model: Model<T>, whereClause: { [name: string]: any }): SqlQueryParams {
@@ -1811,15 +1823,15 @@ export class Database {
     const handleWhere = (rootKey: string, root: any): WhereResult => {
       let result: WhereResult = {
         query: '',
-        bound: []
+        bound: new SqlBoundParams()
       };
 
       const aggregateChildren = (obj: any): string[] => {
         let subConditions: string[] = [];
         for (let childKey of Object.keys(obj)) {
-          let subc = handleWhere(childKey, obj[childKey]);
-          subConditions.push(subc.query);
-          result.bound.push(...subc.bound);
+          let childWhere = handleWhere(childKey, obj[childKey]);
+          subConditions.push(childWhere.query);
+          result.bound.merge(childWhere.bound);
         }
         return subConditions;
       };
@@ -1842,7 +1854,7 @@ export class Database {
           for (let opkey of Object.keys(root)) {
             let childWhere = handleOperator(opkey, rootKey, root[opkey]);
             conditions.push(childWhere.query);
-            result.bound.push(...childWhere.bound)
+            result.bound.merge(childWhere.bound);
           }
           if (conditions.length === 0) {
             throw new Error(`Invalid empty operator object for field ${rootKey}`);
@@ -1852,8 +1864,7 @@ export class Database {
             result.query = conditions.map(x => '(' + x + ')').join(' AND ');
           }
         } else {
-          result.query = rootKey + ' = ?';
-          result.bound.push(model.getFieldWrapperChecked(rootKey).convertToDatabaseForm(root));
+          result.query = rootKey + ' = ' + result.bound.bind(model.getFieldWrapperChecked(rootKey).convertToDatabaseForm(root));
         }
       }
 
@@ -1865,9 +1876,10 @@ export class Database {
       let rightConverted = fsw.convertToDatabaseForm(right);
 
       expectPlain(rightConverted);
+      let bound = new SqlBoundParams();
       return {
-        query: left + ' ' + mapped + ' ?',
-        bound: [rightConverted]
+        query: left + ' ' + mapped + ' ' + bound.bind(rightConverted),
+        bound
       };
     };
 
@@ -1889,10 +1901,13 @@ export class Database {
         return handleMappedOperator(mappedOperators.get(operator.toLowerCase()) as string, left, right);
       } else if (operator === '$in' || operator === '$notin') {
         // we expect a list of values here
-        let bound = (right as any[]).map(x => model.getFieldWrapperChecked(left).convertToDatabaseForm(x));
+        let bound = new SqlBoundParams();
+
+        let list = (right as any[]).map(x => bound.bind(model.getFieldWrapperChecked(left).convertToDatabaseForm(x)));
         let mapped = operator === '$in' ? 'IN' : 'NOT IN';
+
         return {
-          query: left + ' ' + mapped + ' (' + new Array((right as any[]).length).fill('?').join(', ') + ')',
+          query: left + ' ' + mapped + '(' + list.join(', ') + ')',
           bound
         };
       }
@@ -1902,13 +1917,13 @@ export class Database {
 
     let q: SqlQueryParams = {
       where: [],
-      bound: []
+      bound: new SqlBoundParams()
     };
 
     for (let key of Object.keys(whereClause)) {
-      let wr = handleWhere(key, whereClause[key]);
-      q.where.push(wr.query);
-      q.bound.push(...wr.bound);
+      let childWhere = handleWhere(key, whereClause[key]);
+      q.where.push(childWhere.query);
+      q.bound.merge(childWhere.bound);
     }
 
     return q;
@@ -1919,7 +1934,7 @@ export class Database {
       where: [],
       constraints: [],
       joins: [],
-      bound: []
+      bound: new SqlBoundParams()
     };
 
     if (options.where != null) {
@@ -1934,9 +1949,10 @@ export class Database {
       where: [],
       constraints: [],
       joins: [],
-      bound: []
+      bound: new SqlBoundParams()
     };
 
+    // process search options
     if (options.where != null) {
       q = Object.assign(q, this._whereToQuery(model, options.where));
     }
@@ -1962,6 +1978,7 @@ export class Database {
       addConstraint('OFFSET ' + options.offset);
     }
 
+    // process sorting
     let sortParts: string[] = [];
     let defSorting = model.defaultSorting;
     if (options.sort != null && options.sort.length > 0) {
@@ -2019,5 +2036,14 @@ export class Database {
     let collation = caseSensitive ? '' : 'COLLATE NOCASE';
     let sortOrder = order === SortOrder.Desc ? 'DESC' : 'ASC';
     return `${by} ${collation} ${sortOrder}`;
+  }
+
+  protected _prepare(sql: string, bindings?: SqlBoundParams|any[]) {
+    this._logQuery(sql, bindings);
+    let prepared = this._db.prepare(sql);
+    if (bindings != null) {
+      return prepared.bind(bindings instanceof SqlBoundParams ? bindings.sqlBindings : bindings);
+    }
+    return prepared;
   }
 }
