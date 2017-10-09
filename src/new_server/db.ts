@@ -219,7 +219,11 @@ class DbRelation<T> {
   }
 
   protected _ensureRelatedPksGood(pks: any[]): void {
-
+    for (let pk of pks) {
+      if (pk == null) {
+        throw new InstanceInvalidError();
+      }
+    }
   }
 
   /** Protected area **/
@@ -391,11 +395,11 @@ class DbManyRelation<T, R> extends DbRelation<T> implements MultiRelation<T, R, 
     });
   }
 
-  linkUsing(value: Instance<R>, relationTemplate: { [p: string]: any }): Promise<void> {
+  linkUsing(value: Instance<R>): Promise<void> {
     return this.link(value);
   }
 
-  linkByPKUsing(pk: any, relationTemplate: { [p: string]: any }): Promise<void> {
+  linkByPKUsing(pk: any): Promise<void> {
     return this.linkByPK(pk);
   }
 
@@ -444,11 +448,15 @@ class DbManyRelation<T, R> extends DbRelation<T> implements MultiRelation<T, R, 
     });
   }
 
-  async find(options: FindOptions): Promise<FindRelationResult<R, void>> {
+  async find(options?: FindOptions): Promise<FindRelationResult<R, void>> {
     this._ensureGood();
 
+    let givenWhere = options && options.where ? options.where : {};
+
     let result = await this._d.companionModel.find({
+      ...(options ? options : {}),
       where: {
+        ...givenWhere,
         [this._d.foreignKey]: {
           $eq: this._inst.$rowId
         }
@@ -755,7 +763,7 @@ export class Model<T> {
   getFieldWrapperChecked(name: string): FieldSpecWrapper {
     let fw = this.getFieldWrapper(name);
     if (fw == null) {
-      throw new Error(`No field named [${fw}] found. Asked for a field named ${name}, but we have only the following fields: ${this.fields.map(x => x.fieldName)}`);
+      throw new Error(`No field named [${name}] found. We have only the following fields: ${this.fields.map(x => x.fieldName)}`);
     }
     return fw;
   }
@@ -1269,14 +1277,14 @@ export class Model<T> {
     }
 
     return new Proxy(inst, {
-      get: function(target: DatabaseInstance<T>, name: string, receiver: any): any {
+      get: function(target: DatabaseInstance<T>, name: string): any {
         if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
           return Reflect.get(target, name, target);
         } else {
           return target.$get(name);
         }
       },
-      set: function(target: DatabaseInstance<T>, name: string, value: any, receiver: any): boolean {
+      set: function(target: DatabaseInstance<T>, name: string, value: any): boolean {
         if (!(typeof name === 'string') || name.startsWith('$') || Reflect.has(target, name)) {
           return Reflect.set(target, name, value, target);
         } else {
@@ -1521,11 +1529,6 @@ export interface RemoveOptions extends QueryOptions {
 
 }
 
-interface WhereResult {
-  query: string;
-  bound: SqlBoundParams;
-}
-
 export type JoinedInstances<T> = { [name: string]: Instance<T>[] };
 
 export interface FindResult<T> {
@@ -1564,12 +1567,23 @@ class SqlBoundParams {
   protected _bound: SqlBindings = {};
 }
 
-interface SqlQueryParams {
-  where: string[];
-  constraints?: string[];
-  bound: SqlBoundParams;
-  joins?: string[];
-  extraColumns?: string[];
+class ParsedJoin {
+  public joinType: JoinType;
+  public sourceTable: string;
+  public selectWhere?: string;
+  public alias: string;
+  public condition: string;
+
+  make(): string {
+    let alias = this.alias ? 'AS ' + this.alias : '';
+    let source: string;
+    if (this.selectWhere == null) {
+      source = this.sourceTable;
+    } else {
+      source = `SELECT * FROM ${this.sourceTable} WHERE ${this.selectWhere}`;
+    }
+    return `${this.joinType} JOIN ${source} ${alias} ON ${this.condition}`;
+  }
 }
 
 const CHAR_UNDERSCORE = '_'.charCodeAt(0);
@@ -1756,19 +1770,9 @@ export class Database {
   }
 
   async find<T>(model: Model<T>, options: FindOptions): Promise<FindResult<T>> {
-    let q = this._findOptionsToQuery(model, options);
+    let query = SelectQueryBuilder.buildSelect(model, options);
 
-    // build list of columns we should fetch from database
-    let columns: string[] = this._makeColumnListForModel(model);
-    if (q.extraColumns != null) {
-      columns.push(...q.extraColumns);
-    }
-
-    let whereClause: string = this._makeWhere(q.where);
-    let joins = q.joins == null ? '' : q.joins.join(' ');
-    let constraints = q.constraints == null ? '' : q.constraints.join(' ');
-    let sql = `SELECT ${columns.join(', ')} FROM ${model.name} ${joins} ${whereClause} ${constraints}`;
-    let sqlResults = this._prepare(sql, q.bound).all();
+    let sqlResults = this._prepare(query.selectQuery, query.bound).all();
 
     let result: FindResult<T> = {
       totalCount: null,
@@ -1790,15 +1794,8 @@ export class Database {
       }
     }
 
-    if (options.fetchTotalCount === true) {
-      // we should run an extra query to get total number of rows without taking limit and offset into account
-      let countConstraints: string = '';
-      if (q.constraints != null) {
-        countConstraints = q.constraints.filter(constr => !constr.startsWith('LIMIT')).join(' ');
-      }
-      let joins = q.joins == null ? '' : q.joins.join(' ');
-      let countSql = `SELECT COUNT(*) FROM ${model.name} ${joins} ${whereClause} ${countConstraints}`;
-      let countResult = this._prepare(countSql, q.bound).get();
+    if (options.fetchTotalCount === true && query.countQuery) {
+      let countResult = this._prepare(query.countQuery, query.bound).get();
       result.totalCount = countResult['COUNT(*)'] as number;
     }
 
@@ -1806,34 +1803,19 @@ export class Database {
   }
 
   async update<T>(model: Model<T>, options: UpdateOptions): Promise<void> {
-    let q = this._simpleOptionsToQuery(model, options);
-
-    let columns = Object.keys(options.set);
-    if (columns.length === 0) {
-      // nothing to update
+    let query = QueryBuilder.buildUpdate(model, options);
+    if (!query.query) {
       return;
     }
-
-    let setClause: string = columns.map(
-        col => col + ' = ' + q.bound.bind(model.getFieldWrapperChecked(col).convertToDatabaseForm(options.set[col]))
-    ).join(', ');
-
-    let whereClause = this._makeWhere(q.where);
-    let sql = `UPDATE ${model.name} SET ${setClause} ${whereClause}`;
-    let res = await this._prepare(sql, q.bound).run();
+    await this._prepare(query.query, query.bound).run();
   }
 
   async remove<T>(model: Model<T>, options: RemoveOptions): Promise<void> {
-    let q = this._simpleOptionsToQuery(model, options);
-
-    if (!q.where || q.where.length === 0) {
-      throw new Error('Attempted to call Model.remove without search criteria. To remove all instances, use Model.removeAll');
+    let query = QueryBuilder.buildRemove(model, options);
+    if (!query.query) {
+      return;
     }
-
-    let whereClause = this._makeWhere(q.where);
-    let sql = `DELETE FROM ${model.name} ${whereClause}`;
-
-    await this._prepare(sql, q.bound).run();
+    await this._prepare(query.query, query.bound).run();
   }
 
   async removeAll<T>(model: Model<T>): Promise<void> {
@@ -1888,237 +1870,6 @@ export class Database {
     console.log('Q:', query, bound == null ? '' : (bound instanceof SqlBoundParams ? bound.sqlBindings : bound));
   }
 
-  protected _whereToQuery<T>(model: Model<T>, whereClause: { [name: string]: any }): SqlQueryParams {
-    const expectPlain = (value: any): void => {
-      let type = typeof value;
-      if (['string', 'number', 'boolean'].indexOf(type) < 0 && value != null) {
-        throw new Error('Plain value expected, but got this: ' + value + ' of type ' + type);
-      }
-    };
-
-    const handleWhere = (rootKey: string, root: any): WhereResult => {
-      let result: WhereResult = {
-        query: '',
-        bound: new SqlBoundParams()
-      };
-
-      const aggregateChildren = (obj: any): string[] => {
-        let subConditions: string[] = [];
-        for (let childKey of Object.keys(obj)) {
-          let childWhere = handleWhere(childKey, obj[childKey]);
-          subConditions.push(childWhere.query);
-          result.bound.merge(childWhere.bound);
-        }
-        return subConditions;
-      };
-
-      if (rootKey.startsWith('$')) {
-        // special key
-        rootKey = rootKey.toLowerCase();
-        if (rootKey === '$and' || rootKey === '$or') {
-          // join sub-operators with logical one
-          let sqlOperator = rootKey === '$and' ? ' AND ' : ' OR ';
-          result.query = aggregateChildren(root).map(x => '(' + x + ')').join(sqlOperator);
-        } else {
-          throw new Error(`Unknown operator [${rootKey}]`);
-        }
-      } else {
-        // just a value
-        if (typeof root === 'object' && root != null) {
-          // if it is object, we should inspect it for operators
-          let conditions: string[] = [];
-          for (let opkey of Object.keys(root)) {
-            let childWhere = handleOperator(opkey, rootKey, root[opkey]);
-            conditions.push(childWhere.query);
-            result.bound.merge(childWhere.bound);
-          }
-          if (conditions.length === 0) {
-            throw new Error(`Invalid empty operator object for field ${rootKey}`);
-          } else if (conditions.length === 1) {
-            result.query = conditions[0];
-          } else {
-            result.query = conditions.map(x => '(' + x + ')').join(' AND ');
-          }
-        } else {
-          result.query = rootKey + ' = ' + result.bound.bind(model.getFieldWrapperChecked(rootKey).convertToDatabaseForm(root));
-        }
-      }
-
-      return result;
-    };
-
-    const handleMappedOperator = (mapped: string, left: string, right: any): WhereResult => {
-      let fsw = model.getFieldWrapperChecked(left);
-      let rightConverted = fsw.convertToDatabaseForm(right);
-
-      expectPlain(rightConverted);
-      let bound = new SqlBoundParams();
-      return {
-        query: left + ' ' + mapped + ' ' + bound.bind(rightConverted),
-        bound
-      };
-    };
-
-    const handleOperator = (operator: string, left: string, right: any): WhereResult => {
-      operator = operator.toLowerCase();
-
-      let mappedOperators = mapFromObject<string>({
-        ['$eq']: '=',
-        ['$like']: 'LIKE',
-        ['$gt']: '>',
-        ['$lt']: '<',
-        ['$gte']: '>=',
-        ['$lte']: '<=',
-        ['$ne']: '<>',
-        ['$glob']: 'GLOB'
-      });
-
-      if (mappedOperators.has(operator.toLowerCase())) {
-        return handleMappedOperator(mappedOperators.get(operator.toLowerCase()) as string, left, right);
-      } else if (operator === '$in' || operator === '$notin') {
-        // we expect a list of values here
-        if (right.length === 1) {
-          return handleMappedOperator(mappedOperators.get(operator === '$in' ? '$eq' : '$ne') as string, left, right[0]);
-        } else {
-          let bound = new SqlBoundParams();
-          let list = (right as any[]).map(x => bound.bind(model.getFieldWrapperChecked(left).convertToDatabaseForm(x)));
-          let mapped = operator === '$in' ? 'IN' : 'NOT IN';
-          return {
-            query: left + ' ' + mapped + ' (' + list.join(', ') + ')',
-            bound
-          };
-        }
-      }
-
-      throw new Error(`Invalid operator [${operator}]`);
-    };
-
-    let q: SqlQueryParams = {
-      where: [],
-      bound: new SqlBoundParams()
-    };
-
-    for (let key of Object.keys(whereClause)) {
-      let childWhere = handleWhere(key, whereClause[key]);
-      q.where.push(childWhere.query);
-      q.bound.merge(childWhere.bound);
-    }
-
-    return q;
-  }
-
-  protected _simpleOptionsToQuery<T>(model: Model<T>, options: QueryOptions): SqlQueryParams {
-    let q: SqlQueryParams = {
-      where: [],
-      bound: new SqlBoundParams()
-    };
-
-    if (options.where != null) {
-      q = Object.assign(q, this._whereToQuery(model, options.where));
-    }
-
-    return q;
-  }
-
-  protected _findOptionsToQuery<T>(model: Model<T>, options: FindOptions): SqlQueryParams {
-    let q: SqlQueryParams = {
-      where: [],
-      bound: new SqlBoundParams()
-    };
-
-    // process search options
-    if (options.where != null) {
-      q = Object.assign(q, this._whereToQuery(model, options.where));
-    }
-
-    const addConstraint = (cr: string): void => {
-      if (q.constraints == null) {
-        q.constraints = [];
-      }
-      q.constraints.push(cr);
-    };
-
-    const addJoin = (j: string): void => {
-      if (q.joins == null) {
-        q.joins = [];
-      }
-      q.joins.push(j);
-    };
-
-    if (options.limit != null) {
-      addConstraint('LIMIT ' + options.limit);
-    }
-    if (options.offset != null) {
-      addConstraint('OFFSET ' + options.offset);
-    }
-
-    // process sorting
-    let sortParts: string[] = [];
-    let defSorting = model.defaultSorting;
-    if (options.sort != null && options.sort.length > 0) {
-      // apply specified sorting rules
-      for (let sortProp of options.sort) {
-        if (typeof sortProp === 'string') {
-          if (model.getFieldSpec(sortProp) == null) {
-            throw new Error(`Invalid sorting property: no field [${sortProp}]`);
-          }
-          sortParts.push(this._makeSort(sortProp, SortOrder.Asc, false));
-        } else {
-          if (model.getFieldSpec(sortProp.by) == null) {
-            throw new Error(`Invalid sorting property: no field [${sortProp}]`);
-          }
-          sortParts.push(this._makeSort(sortProp.by, sortProp.order, sortProp.caseSensitive));
-        }
-      }
-
-      if (defSorting != null) {
-        // check if default sorting option was already used
-        if (!options.sort.some(x => {
-              return (typeof x === 'string' && x === (defSorting as SortProp).by) ||
-                  (typeof x !== 'string' && x.by === (defSorting as SortProp).by);
-            })) {
-          // if default sorting option was not used, add it to the end
-          if (model.getFieldSpec(defSorting.by) == null) {
-            throw new Error(`Invalid sorting property: no field [${defSorting.by}]`);
-          }
-          sortParts.push(this._makeSort(defSorting.by, defSorting.order, defSorting.caseSensitive));
-        }
-      }
-    }
-
-    if (sortParts.length === 0 && defSorting != null) {
-      sortParts.push(this._makeSort(defSorting.by, defSorting.order, defSorting.caseSensitive));
-    }
-
-    if (sortParts.length > 0) {
-      addConstraint('ORDER BY ' + sortParts.join(', '));
-    }
-
-    // process joins
-    if (options.join && options.join.length > 0) {
-      for (let joinOption of options.join) {
-        // generate and join sql for joining a table
-        let rd = joinOption.relation.relationData;
-        let cond = joinOption.relation.getJoinCondition(model, rd.name);
-        addJoin(`${joinOption.type} JOIN ${rd.companionModel.name} AS ${rd.name} ON ${cond}`);
-
-        // and we should add extra columns to select joined items as well.
-        if (q.extraColumns == null) {
-          q.extraColumns = [];
-        }
-        q.extraColumns.push(...this._makeColumnListForModel(rd.companionModel, rd.name));
-      }
-    }
-
-    return q;
-  }
-
-  protected _makeSort(by: string, order?: SortOrder, caseSensitive?: boolean): string {
-    let collation = caseSensitive ? '' : 'COLLATE NOCASE';
-    let sortOrder = order === SortOrder.Desc ? 'DESC' : 'ASC';
-    return `${by} ${collation} ${sortOrder}`;
-  }
-
   protected _prepare(sql: string, bindings?: SqlBoundParams|any[]) {
     this._logQuery(sql, bindings);
     let prepared = this._db.prepare(sql);
@@ -2127,8 +1878,214 @@ export class Database {
     }
     return prepared;
   }
+}
 
-  protected _makeColumnListForModel(model: Model<any>, prefix?: string): string[] {
+interface BuiltSelectQuery {
+  selectQuery: string;
+  bound: SqlBoundParams;
+  countQuery?: string;
+}
+
+interface BuiltQuery {
+  query: string;
+  bound: SqlBoundParams;
+}
+
+enum WhereTreeContext {
+  Logical,
+  Value
+}
+
+enum WhereTreeOperator {
+  And = ' AND ',
+  Or = ' OR '
+}
+
+class WhereTree {
+  constructor(context: WhereTreeContext, operator: WhereTreeOperator = WhereTreeOperator.And,
+              closestField: string = '') {
+    this._context = context;
+    this._operator = operator;
+    this._closestField = closestField;
+  }
+
+  append(child: string|WhereTree): void {
+    if (this._children == null) {
+      this._children = [ child ];
+    } else {
+      this._children.push(child);
+    }
+  }
+
+  build(): string {
+    if (this._children == null || this._children.length === 0) {
+      return '';
+    } else if (this._children.length === 1) {
+      let child = this._children[0];
+      return typeof child === 'string' ? child : child.build();
+    } else {
+      return this._children.map(x => '(' + (typeof x === 'string' ? x : x.build()) + ')').join(this._operator);
+    }
+  }
+
+  get children(): (string|WhereTree)[] { return this._children == null ? [] : this._children; }
+  get context(): WhereTreeContext { return this._context; }
+  get closestField(): string { return this._closestField; }
+
+  /** Protected area **/
+
+  protected _children: null|(string|WhereTree)[] = [];
+  protected _context: WhereTreeContext;
+  protected _operator: WhereTreeOperator;
+  protected _closestField: string;
+}
+
+abstract class QueryBuilder {
+  static buildUpdate(model: Model<any>, options: UpdateOptions): BuiltQuery {
+    return new UpdateQueryBuilder(model, options)._buildUpdate();
+  }
+
+  static buildRemove(model: Model<any>, options: RemoveOptions): BuiltQuery {
+    return new RemoveQueryBuilder(model, options)._buildRemove();
+  }
+
+  static buildSelect(model: Model<any>, options: FindOptions): BuiltSelectQuery {
+    return new SelectQueryBuilder(model, options)._buildSelect();
+  }
+
+  /** Protected area **/
+
+  protected _model: Model<any>;
+  protected _whereClause: WhereCriterion;
+  protected _globalWhere: WhereTree = new WhereTree(WhereTreeContext.Logical);
+  protected _constraints: string[]|null = null;
+  protected _joins: ParsedJoin[]|null = null;
+  protected _extraColumns: string[]|null = null;
+  protected _bound: SqlBoundParams = new SqlBoundParams();
+
+  protected static _mappedOperators = mapFromObject<string>({
+    ['$eq']: '=',
+    ['$like']: 'LIKE',
+    ['$gt']: '>',
+    ['$lt']: '<',
+    ['$gte']: '>=',
+    ['$lte']: '<=',
+    ['$ne']: '<>',
+    ['$glob']: 'GLOB'
+  });
+
+  protected constructor(model: Model<any>, whereClause?: WhereCriterion) {
+    this._model = model;
+    this._whereClause = whereClause == null ? { } : whereClause;
+  }
+
+  protected _buildWhere(): void {
+    Object.keys(this._whereClause).forEach(
+        key => this._buildWhereNode(key, this._whereClause[key], this._globalWhere)
+    );
+  }
+
+  protected static _expectPlain(value: any): void {
+    let type = typeof value;
+    if (['string', 'number', 'boolean'].indexOf(type) < 0 && value != null) {
+      throw new Error('Plain value expected, but got this: ' + value + ' of type ' + type);
+    }
+  }
+
+  protected _buildWhereNode(key: string, value: any, parentNode: WhereTree): void {
+    /**
+     * let where = {
+          field: { // << WhereTreeContext.Logical
+            $eq: 'some' // << WhereTreeContext.Value
+          },
+          $and: { // << WhereTreeContext.Logical
+            field1: { // << WhereTreeContext.Logical
+              $eq: 'value' // << WhereTreeContext.Value
+            }
+          }
+        };
+     */
+
+    if (key.startsWith('$')) {
+      // special key: operator
+      key = key.toLowerCase();
+      if (parentNode.context === WhereTreeContext.Logical) {
+        if (key === '$and' || key === '$or') {
+          // join sub-trees with logical operator.
+          // logical operators are the only operators that can appear at top level, not under any field name
+          let operator = key === '$and' ? WhereTreeOperator.And : WhereTreeOperator.Or;
+          let node = new WhereTree(WhereTreeContext.Logical, operator);
+
+          for (let subKey of Object.keys(value)) {
+            this._buildWhereNode(subKey, value[subKey], node);
+          }
+
+          parentNode.append(node);
+        } else {
+          throw new Error(`Unexpected operator [${key}], unknown or not allowed here`);
+        }
+      } else if (parentNode.context === WhereTreeContext.Value) {
+        this._buildOperator(key.toLowerCase(), parentNode.closestField, value, parentNode);
+      }
+    } else {
+      if (parentNode.context === WhereTreeContext.Logical) {
+        // key is name of some field
+        if (typeof value === 'object' && value != null) {
+          // any object given as a value for a field name it treated as a container for operators.
+          // so if your fields can convert an object to plain database value and you want to search for objects,
+          // the following will not work:
+          // field_name: { prop: ... }
+          // use explicit $eq operator instead:
+          // field_name: { $eq: { prop: ... } }
+
+          let node = new WhereTree(WhereTreeContext.Value, WhereTreeOperator.And, key);
+          for (let subKey of Object.keys(value)) {
+            this._buildWhereNode(subKey, value[subKey], node);
+          }
+          parentNode.append(node);
+        } else {
+          // if just a plain value given, we assume that we should use equality operator
+          this._buildMappedOperator('=', key, value, parentNode);
+        }
+      } else if (parentNode.context === WhereTreeContext.Value) {
+        throw new Error(`Unexpected value under a field name (${value}): an operator expected`);
+      }
+    }
+  }
+
+  protected _buildMappedOperator(operator: string, left: string, right: any, parentNode: WhereTree): void {
+    let rightConv = this._model.getFieldWrapperChecked(left).convertToDatabaseForm(right);
+    QueryBuilder._expectPlain(rightConv);
+    parentNode.append(left + ' ' + operator + ' ' + this._bound.bind(rightConv));
+  }
+
+  protected _buildOperator(operator: string, left: string, right: any, parentNode: WhereTree): void {
+    if (QueryBuilder._mappedOperators.has(operator)) {
+      this._buildMappedOperator(QueryBuilder._mappedOperators.get(operator) as string, left, right, parentNode);
+    } else if (operator === '$in' || operator === '$notin') {
+      // for these operators we expect a list of values
+      if (!right.length) {
+        throw new Error('$in and $notin operators expect a list of values');
+      } else if (right.length === 1) {
+        // no need for IN operator if we have only one value, replace it with an equality operator
+        this._buildMappedOperator(
+            QueryBuilder._mappedOperators.get(operator === '$in' ? '$eq' : '$ne') as string,
+            left, right[0], parentNode
+        );
+      } else {
+        // translate to IN or NOT IN sql operators
+        let list = (right as any[]).map(
+            x => this._bound.bind(this._model.getFieldWrapperChecked(left).convertToDatabaseForm(x))
+        );
+        let mapped = operator === '$in' ? 'IN' : 'NOT IN';
+        parentNode.append(left + ' ' + mapped + ' (' + list.join(', ') + ')');
+      }
+    } else {
+      throw new Error(`Invalid operator [${operator}]`);
+    }
+  }
+
+  protected static _makeColumnListForModel(model: Model<any>, prefix?: string): string[] {
     let columns: string[] = model.fields.map(fsw => {
       if (prefix) {
         let colName = prefix + '.' + fsw.fieldName;
@@ -2146,13 +2103,223 @@ export class Database {
     return columns;
   }
 
-  protected _makeWhere(where: string[]|null|undefined): string {
-      if (!where || where.length === 0) {
-      return '';
-    } else if (where.length === 1) {
-      return 'WHERE ' + where[0];
+  protected static _makeSort(by: string, order?: SortOrder, caseSensitive?: boolean): string {
+    let collation = caseSensitive ? '' : 'COLLATE NOCASE';
+    let sortOrder = order === SortOrder.Desc ? 'DESC' : 'ASC';
+    return `${by} ${collation} ${sortOrder}`;
+  }
+  
+  protected _makeWhere(): string {
+    console.log(this._globalWhere.children);
+    let whereClause = this._globalWhere.build();
+    return whereClause ? 'WHERE ' + whereClause : '';
+  }
+}
+
+class UpdateQueryBuilder extends QueryBuilder {
+  constructor(model: Model<any>, options: UpdateOptions) {
+    super(model, options.where);
+    this._options = options;
+  }
+
+  _buildUpdate(): BuiltQuery {
+    this._buildWhere();
+
+    let columns = Object.keys(this._options.set);
+    if (columns.length === 0) {
+      // nothing to update
+      return {
+        query: '',
+        bound: this._bound
+      };
+    }
+
+    let setClause: string = columns.map(
+        col => col + ' = ' + this._bound.bind(this._model.getFieldWrapperChecked(col).convertToDatabaseForm(this._options.set[col]))
+    ).join(', ');
+
+    let whereClause = this._makeWhere();
+    let query = `UPDATE ${this._model.name} SET ${setClause} ${whereClause}`;
+
+    return {
+      query,
+      bound: this._bound
+    };
+  }
+  
+  /** Protected area **/
+
+  protected _options: UpdateOptions;
+}
+
+class RemoveQueryBuilder extends QueryBuilder {
+  constructor(model: Model<any>, options: RemoveOptions) {
+    super(model, options.where);
+    this._options = options;
+  }
+
+  _buildRemove(): BuiltQuery {
+    if (!this._whereClause || this._whereClause.length === 0) {
+      throw new Error('Attempted to call Model.remove without search criteria. To remove all instances, use Model.removeAll');
+    }
+
+    this._buildWhere();
+
+    let whereClause = this._makeWhere();
+    let query = `DELETE FROM ${this._model.name} ${whereClause}`;
+
+    return {
+      query,
+      bound: this._bound
+    };
+  }
+  
+  /** Protected area **/
+
+  protected _options: RemoveOptions;
+}
+
+class SelectQueryBuilder extends QueryBuilder {
+  constructor(model: Model<any>, options: FindOptions) {
+    super(model, options.where);
+    this._options = options;
+  }
+
+  _buildSelect(): BuiltSelectQuery {
+    this._buildWhere();
+    this._buildConstraints();
+    this._buildSort();
+    this._buildJoins();
+
+    // build list of columns we should fetch from database
+    let columns: string[] = QueryBuilder._makeColumnListForModel(this._model);
+    if (this._extraColumns != null) {
+      columns.push(...this._extraColumns);
+    }
+
+    let whereClause: string = this._makeWhere();
+    let joins = this._joins == null ? '' : this._joins.map(x => x.make()).join(' ');
+    let constraints = this._constraints == null ? '' : this._constraints.join(' ');
+    let selectQuery = `SELECT ${columns.join(', ')} FROM ${this._model.name} ${joins} ${whereClause} ${constraints}`;
+
+    if (this._options.fetchTotalCount) {
+      let countConstraints: string = '';
+      if (this._constraints != null) {
+        countConstraints = this._constraints.filter(constr => !constr.startsWith('LIMIT')).join(' ');
+      }
+      let joins = this._joins == null ? '' : this._joins.map(x => x.make()).join(' ');
+      let countQuery = `SELECT COUNT(*) FROM ${this._model.name} ${joins} ${whereClause} ${countConstraints}`;
+
+      return {
+        selectQuery,
+        bound: this._bound,
+        countQuery
+      };
+    }
+
+    return {
+      selectQuery,
+      bound: this._bound
+    };
+  }
+  
+  /** Protected area **/
+
+  protected _options: FindOptions;
+
+  protected _buildSort(): void {
+    let sortParts: string[] = [];
+    let defSorting = this._model.defaultSorting;
+    if (this._options.sort != null && this._options.sort.length > 0) {
+      // apply specified sorting rules
+      for (let sortProp of this._options.sort) {
+        if (typeof sortProp === 'string') {
+          if (this._model.getFieldSpec(sortProp) == null) {
+            throw new Error(`Invalid sorting property: no field [${sortProp}]`);
+          }
+          sortParts.push(QueryBuilder._makeSort(sortProp, SortOrder.Asc, false));
+        } else {
+          if (this._model.getFieldSpec(sortProp.by) == null) {
+            throw new Error(`Invalid sorting property: no field [${sortProp}]`);
+          }
+          sortParts.push(QueryBuilder._makeSort(sortProp.by, sortProp.order, sortProp.caseSensitive));
+        }
+      }
+
+      if (defSorting != null) {
+        // check if default sorting option was already used
+        if (!this._options.sort.some(x => {
+              return (typeof x === 'string' && x === (defSorting as SortProp).by) ||
+                  (typeof x !== 'string' && x.by === (defSorting as SortProp).by);
+            })) {
+          // if default sorting option was not used, add it to the end
+          if (this._model.getFieldSpec(defSorting.by) == null) {
+            throw new Error(`Invalid sorting property: no field [${defSorting.by}]`);
+          }
+          sortParts.push(QueryBuilder._makeSort(defSorting.by, defSorting.order, defSorting.caseSensitive));
+        }
+      }
+    }
+
+    if (sortParts.length === 0 && defSorting != null) {
+      sortParts.push(QueryBuilder._makeSort(defSorting.by, defSorting.order, defSorting.caseSensitive));
+    }
+
+    if (sortParts.length > 0) {
+      this._addConstraint('ORDER BY ' + sortParts.join(', '));
+    }
+  }
+
+  protected _buildJoins(): void {
+    if (this._options.join && this._options.join.length > 0) {
+      for (let joinOption of this._options.join) {
+        // generate and join sql for joining a table
+        let rd = joinOption.relation.relationData;
+
+        let jd = new ParsedJoin();
+        jd.alias = rd.name;
+        jd.joinType = joinOption.type;
+        jd.sourceTable = rd.companionModel.name;
+        jd.condition = joinOption.relation.getJoinCondition(this._model, rd.name);
+
+        this._addJoin(jd);
+
+        // and we should add extra columns to select joined items as well.
+        this._addExtraColumns(...QueryBuilder._makeColumnListForModel(rd.companionModel, rd.name));
+      }
+    }
+  }
+
+  protected _buildConstraints(): void {
+    if (this._options.limit != null) {
+      this._addConstraint('LIMIT ' + this._options.limit);
+    }
+    if (this._options.offset != null) {
+      this._addConstraint('OFFSET ' + this._options.offset);
+    }
+  }
+
+  protected _addConstraint(constr: string): void {
+    if (this._constraints == null) {
+      this._constraints = [ constr ];
     } else {
-      return 'WHERE ' + where.map(x => '(' + x + ')').join(' AND ');
+      this._constraints.push(constr);
+    }
+  }
+
+  protected _addJoin(jd: ParsedJoin): void {
+    if (this._joins == null) {
+      this._joins = [ jd ];
+    } else {
+      this._joins.push(jd);
+    }
+  }
+
+  protected _addExtraColumns(...col: string[]): void {
+    if (this._extraColumns == null) {
+      this._extraColumns = [ ...col ];
+    } else {
+      this._extraColumns.push(...col);
     }
   }
 }
