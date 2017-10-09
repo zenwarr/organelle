@@ -1526,10 +1526,12 @@ interface WhereResult {
   bound: SqlBoundParams;
 }
 
+export type JoinedInstances<T> = { [name: string]: Instance<T>[] };
+
 export interface FindResult<T> {
   totalCount?: number|null;
   items: Instance<T>[];
-  joined?: { [name: string]: Instance<any>[] };
+  joined?: JoinedInstances<any>;
 }
 
 export interface FindRelationResult<T, R> extends FindResult<T> {
