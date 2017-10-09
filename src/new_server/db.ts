@@ -131,15 +131,17 @@ export class DatabaseInstance<T> {
 
 export type Instance<T> = T & DatabaseInstance<T>;
 
-interface PrivateRelation {
-  getJoinCondition(model: Model<any>, companionAlias: string): string;
+/**
+ * Objects implementing this interface are added to DatabaseInstance objects and allow to manipulate relations.
+ */
+export interface Relation {
+  name: string;
   relationData: RelationFieldData;
 }
 
-export interface Relation extends PrivateRelation {
-  name: string;
-}
-
+/**
+ * This interface allows to manipulate relations which link an instance to a single instance of companion model.
+ */
 export interface SingleRelation<T, R> extends Relation {
   get(): Promise<Instance<R>|null>;
   link(related: Instance<R>): Promise<void>;
@@ -147,6 +149,9 @@ export interface SingleRelation<T, R> extends Relation {
   unlink(): Promise<void>;
 }
 
+/**
+ * This interface allows to manipulate relations which link an instance to multiple instances of companion model.
+ */
 export interface MultiRelation<T, R, RR> extends Relation {
   linkUsing(value: Instance<R>, relationTemplate: { [name: string]: any }): Promise<void>;
   link(...values: Instance<R>[]): Promise<void>;
@@ -159,11 +164,17 @@ export interface MultiRelation<T, R, RR> extends Relation {
   find(options?: FindOptions): Promise<FindRelationResult<R, RR>>;
 }
 
+/**
+ * Options for new one-to-one and many-to-one relations.
+ */
 export interface SingleRelationOptions {
   foreignKey?: string;
   companionField?: string;
 }
 
+/**
+ * Options for new one-to-many and many-to-many relations.
+ */
 export interface MultiRelationOptions {
   model?: Model<any>|string;
   leftForeignKey?: string;
@@ -171,6 +182,9 @@ export interface MultiRelationOptions {
   companionField?: string;
 }
 
+/**
+ * Supported relation types
+ */
 enum RelationType {
   OneToOne,
   ManyToOne,
@@ -178,24 +192,154 @@ enum RelationType {
   ManyToMany
 }
 
-interface RelationFieldData {
+/**
+ * There objects are used to store information about relations.
+ * Each model contains a list of these objects -- one for each accessible relation.
+ * A companion model can also have a RelationFieldData object referring to the same logical relation.
+ */
+abstract class RelationFieldData {
   name: string;
   type: RelationType;
   model: Model<any>;
   companionModel: Model<any>;
   isLeft: boolean;
+
+  /**
+   * Builds SQL join condition.
+   * @param {Model<any>} model Model on which we are doing select query.
+   * This model can be either current model or the relation model (if any).
+   * @param {string} companionAlias Alias of companion model.
+   * This model can be either companion model or the relation model (if any)
+   * @param joinModel Model we are going to join.
+   * @returns {string}
+   */
+  abstract getJoinCondition(model: Model<any>, companionAlias: string, joinModel: Model<any>): string;
+  abstract createAccesser(inst: Instance<any>): Relation;
 }
 
-interface SingleRelationFieldData extends RelationFieldData {
-  foreignKey: string;
+class SingleRelationFieldData extends RelationFieldData {
+  constructor(public name: string, public type: RelationType, public model: Model<any>,
+              public companionModel: Model<any>, public isLeft: boolean,
+              public foreignKey: string) {
+    super();
+  }
+
+  get isCompanion(): boolean {
+    return this.type === RelationType.OneToOne && !this.isLeft;
+  }
+
+  getJoinCondition(model: Model<any>, companionAlias: string, joinModel: Model<any>): string {
+    if (model !== this.model || joinModel !== this.companionModel) {
+      throw new ModelMismatchError();
+    }
+
+    let companionPk = this.companionModel.getPrimaryKeyName();
+    if (!this.isCompanion) {
+      return `${companionAlias}.${companionPk} = ${this.model.name}.${this.foreignKey}`;
+    } else {
+      return `${companionAlias}.${this.foreignKey} = ${this.model.name}.${this.model.getPrimaryKeyName()}`;
+    }
+  }
+
+  createAccesser(inst: Instance<any>): Relation {
+    return new DbSingleRelation(inst, this);
+  }
 }
 
-interface MultiRelationFieldData extends RelationFieldData {
-  relationModel: Model<any>;
-  leftForeignKey: string;
-  rightForeignKey: string;
+class ManyRelationFieldData extends RelationFieldData {
+  constructor(public name: string, public type: RelationType, public model: Model<any>,
+              public companionModel: Model<any>, public isLeft: boolean,
+              public foreignKey: string) {
+    super();
+  }
+
+  getJoinCondition(model: Model<any>, companionAlias: string, joinModel: Model<any>): string {
+    if (model !== this.model || joinModel !== this.companionModel) {
+      throw new ModelMismatchError();
+    }
+
+    return `${companionAlias}.${this.foreignKey} = ${this.model.name}.${this.model.getPrimaryKeyName()}`;
+  }
+
+  createAccesser(inst: Instance<any>): Relation {
+    return new DbManyRelation(inst, this);
+  }
 }
 
+class MultiRelationFieldData extends RelationFieldData {
+  constructor(public name: string, public type: RelationType, public model: Model<any>,
+              public companionModel: Model<any>, public isLeft: boolean,
+              public relationModel: Model<any>, public leftForeignKey: string,
+              public rightForeignKey: string) {
+    super();
+  }
+
+  getJoinCondition(model: Model<any>, companionAlias: string, joinModel: Model<any>): string {
+    if (joinModel !== this.relationModel && joinModel !== this.companionModel) {
+      throw new ModelMismatchError();
+    }
+
+    if (model === this.model) {
+      if (joinModel === this.relationModel) {
+        let pk = this.model.getPrimaryKeyName();
+        return `${companionAlias}.${this.myForeignKey} = ${this.model.name}.${pk}`
+      } else if (joinModel === this.companionModel) {
+        let pk = this.companionModel.getPrimaryKeyName();
+        return `${companionAlias}.${pk} IN (SELECT ${this.otherForeignKey} FROM ${this.relationModel.name} WHERE ${this.myForeignKey} = ${this.model.name}.${this.model.getPrimaryKeyName()})`;
+      } else {
+        throw new ModelMismatchError();
+      }
+    } else if (model === this.relationModel && joinModel === this.companionModel) {
+      let pk = this.companionModel.getPrimaryKeyName();
+      return `${companionAlias}.${pk} = ${this.relationModel.name}.${this.otherForeignKey}`;
+    } else {
+      throw new ModelMismatchError();
+    }
+  }
+
+  get myForeignKey(): string {
+    return this.isLeft ? this.leftForeignKey : this.rightForeignKey;
+  }
+
+  get otherForeignKey(): string {
+    return this.isLeft ? this.rightForeignKey : this.leftForeignKey;
+  }
+
+  createAccesser(inst: Instance<any>): Relation {
+    return new DbMultiRelation(inst, this);
+  }
+}
+
+/**
+ * The error thrown when a client tries to link instances of wrong models.
+ */
+class ModelMismatchError extends Error {
+  constructor() {
+    super('Cannot create a relation: an instance given has incorrect model')
+  }
+}
+
+/**
+ * The error thrown when a client tries to link instances that are not flushed to database or in other ways invalid.
+ */
+class InstanceInvalidError extends Error {
+  constructor() {
+    super('Cannot link an instance: primary key is invalid or instance not flushed');
+  }
+}
+
+/**
+ * Each derivative of this class is intended to manage a specific implementation of relation in SQL database.
+ * Objects of this class are added to database instances and implement corresponding interfaces.
+ * There can be three types of relations from SQL point of view
+ *  - single (DbSingleRelation): an instance linked to a single instance of companion model,
+ *      and either companion's foreign key is stored in current model or vise versa.
+ *  - many (DbManyRelation): an instance linked to multiple instances of companion model,
+ *      and companion model stores foreign keys pointing to the current model.
+ *  - multi (DbMultiRelation): an extra table is created which stores pairs of foreign keys for both
+ *      current and companion instances. Therefore, an instance linked to multiple instances of companion
+ *      model.
+ */
 class DbRelation<T> {
   constructor(inst: DatabaseInstance<T>) {
     this._inst = inst;
@@ -249,7 +393,7 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
    */
   async get(): Promise<Instance<R>|null> {
     this._ensureGood();
-    if (!this._isCompanion) {
+    if (!this._d.isCompanion) {
       // just find a companion instance by its primary key
       let fk = this._inst.$get(this._d.foreignKey);
       return fk == null ? null : this._d.companionModel.findByPK(fk);
@@ -284,7 +428,7 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
    */
   async linkByPK(pk: any): Promise<void> {
     this._ensureRelatedPksGood([pk]);
-    if (!this._isCompanion) {
+    if (!this._d.isCompanion) {
       // just set our foreign key to the primary key of an item we want to link
       this._inst.$set(this._d.foreignKey, pk);
       return this._inst.$flush([ this._d.foreignKey ]);
@@ -307,7 +451,7 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
   async unlink(): Promise<void> {
     this._ensureGood();
 
-    if (!this._isCompanion) {
+    if (!this._d.isCompanion) {
       this._inst.$set(this._d.foreignKey, null);
       return this._inst.$flush([ this._d.foreignKey ]);
     } else {
@@ -324,40 +468,11 @@ class DbSingleRelation<T, R> extends DbRelation<T> implements SingleRelation<T, 
 
   get name(): string { return this._d.name; }
 
-  getJoinCondition(model: Model<any>, companionAlias: string): string {
-    if (model === this._d.model) {
-      let companionPk = this._d.companionModel.getPrimaryKeyName();
-      if (!this._isCompanion) {
-        return `${companionAlias}.${companionPk} = ${model.name}.${this._d.foreignKey}`;
-      } else {
-        return `${companionAlias}.${this._d.foreignKey} = ${model.name}.${this._d.model.getPrimaryKeyName()}`;
-      }
-    } else {
-      throw new Error('Relation.getJoinCondition: invalid model');
-    }
-  }
-
   get relationData(): RelationFieldData { return this._d; }
 
   /** Protected area **/
 
   protected _d: SingleRelationFieldData;
-
-  protected get _isCompanion(): boolean {
-    return this._d.type === RelationType.OneToOne && !this._d.isLeft;
-  }
-}
-
-class ModelMismatchError extends Error {
-  constructor() {
-    super('Cannot create a relation: an instance given has incorrect model')
-  }
-}
-
-class InstanceInvalidError extends Error {
-  constructor() {
-    super('Cannot link an instance: primary key is invalid or instance not flushed');
-  }
 }
 
 /**
@@ -365,7 +480,7 @@ class InstanceInvalidError extends Error {
  * In all cases, the companion model stores primary indexes of instances of this model and this primary key can be repeated.
  */
 class DbManyRelation<T, R> extends DbRelation<T> implements MultiRelation<T, R, void> {
-  constructor(inst: DatabaseInstance<T>, d: SingleRelationFieldData) {
+  constructor(inst: DatabaseInstance<T>, d: ManyRelationFieldData) {
     super(inst);
     this._d = d;
   }
@@ -466,19 +581,11 @@ class DbManyRelation<T, R> extends DbRelation<T> implements MultiRelation<T, R, 
     return result;
   }
 
-  getJoinCondition(model: Model<any>, companionAlias: string): string {
-    if (model === this._d.model) {
-      return `${companionAlias}.${this._d.foreignKey} = ${model.name}.${model.getPrimaryKeyName()}`;
-    } else {
-      throw new Error('Relation.getJoinCondition: invalid model');
-    }
-  }
-
   get relationData(): RelationFieldData { return this._d; }
 
   /** Protected area **/
 
-  protected _d: SingleRelationFieldData;
+  protected _d: ManyRelationFieldData;
 }
 
 /**
@@ -511,8 +618,8 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
 
     for (let pk of pks) {
       let newRelation = this._d.relationModel.build({
-        [this.myForeignKey]: this._inst.$rowId,
-        [this.otherForeignKey]: pk
+        [this._d.myForeignKey]: this._inst.$rowId,
+        [this._d.otherForeignKey]: pk
       });
       await newRelation.$flush();
     }
@@ -523,8 +630,8 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
     this._ensureRelatedPksGood([pk]);
 
     let newRelation = this._d.relationModel.build(Object.assign({}, relationTemplate, {
-      [this.myForeignKey]: this._inst.$rowId,
-      [this.otherForeignKey]: pk
+      [this._d.myForeignKey]: this._inst.$rowId,
+      [this._d.otherForeignKey]: pk
     }));
     return newRelation.$flush();
   }
@@ -542,8 +649,8 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
 
     return this._d.relationModel.remove({
       where: {
-        [this.myForeignKey]: this._inst.$rowId,
-        [this.otherForeignKey]: {
+        [this._d.myForeignKey]: this._inst.$rowId,
+        [this._d.otherForeignKey]: {
           $in: pks
         }
       }
@@ -554,7 +661,7 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
     this._ensureGood();
 
     let crit: WhereCriterion = Object.assign({}, where);
-    crit[this.myForeignKey] = this._inst.$rowId;
+    crit[this._d.myForeignKey] = this._inst.$rowId;
 
     return this._d.relationModel.remove({
       where: crit
@@ -566,7 +673,7 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
 
     return this._d.relationModel.remove({
       where: {
-        [this.myForeignKey]: this._inst.$rowId
+        [this._d.myForeignKey]: this._inst.$rowId
       }
     });
   }
@@ -586,14 +693,14 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
     if (options && options.join != null) {
       throw new Error('Cannot get list of related items: search options should not have join clause');
     }
-    if (options && options.hasOwnProperty(this.myForeignKey)) {
+    if (options && options.hasOwnProperty(this._d.myForeignKey)) {
       throw new Error('Cannot get list of related items: search options are invalid');
     }
 
     // select ... from relation inner join right on right.id = relation.rightId where right.prop = prop and relation.prop = prop
 
     let whereRelated: WhereCriterion = {
-      [this.myForeignKey]: this._inst.$rowId
+      [this._d.myForeignKey]: this._inst.$rowId
     };
     let where: WhereCriterion = Object.assign({}, options ? options.where : {}, whereRelated);
 
@@ -620,31 +727,11 @@ class DbMultiRelation<T, R, RR> extends DbRelation<T> implements MultiRelation<T
 
   get name(): string { return this._d.name; }
 
-  getJoinCondition(model: Model<any>, companionAlias: string): string {
-    let companionPk = this._d.companionModel.getPrimaryKeyName();
-    if (model === this._d.relationModel) {
-      return `${companionAlias}.${companionPk} = ${model.name}.${this.otherForeignKey}`
-    } else if (model === this._d.model) {
-      let relationName = this._d.relationModel.name;
-      return `${companionAlias}.${companionPk} IN (SELECT ${this.otherForeignKey} FROM ${relationName} WHERE ${this.myForeignKey} = ${this._d.model.name}.${this._d.model.getPrimaryKeyName()}`;
-    } else {
-      throw new Error('Relation.getJoinCondition: invalid model');
-    }
-  }
-
   get relationData(): RelationFieldData { return this._d; }
 
   /** Protected area **/
 
   protected _d: MultiRelationFieldData;
-
-  protected get myForeignKey(): string {
-    return this._d.isLeft ? this._d.leftForeignKey : this._d.rightForeignKey;
-  }
-
-  protected get otherForeignKey(): string {
-    return this._d.isLeft ? this._d.rightForeignKey : this._d.leftForeignKey;
-  }
 }
 
 /**
@@ -923,29 +1010,29 @@ export class Model<T> {
 
     // add relation field to manipulate the relation
     if (field) {
-      this._addRelationField({
-        name: field,
-        type: RelationType.ManyToMany,
-        model: this,
-        companionModel: otherModel,
-        isLeft: true,
+      this._addRelationField(new MultiRelationFieldData(
+        field,
+        RelationType.ManyToMany,
+        this,
+        otherModel,
+        true,
         relationModel,
         leftForeignKey,
         rightForeignKey
-      } as MultiRelationFieldData);
+      ));
     }
 
     if (options && options.companionField) {
-      otherModel._addRelationField({
-        name: options.companionField,
-        type: RelationType.ManyToMany,
-        model: otherModel,
-        companionModel: this,
-        isLeft: false,
+      otherModel._addRelationField(new MultiRelationFieldData(
+        options.companionField,
+        RelationType.ManyToMany,
+        otherModel,
+        this,
+        false,
         relationModel,
         leftForeignKey,
         rightForeignKey
-      } as MultiRelationFieldData);
+      ));
     }
 
     return this;
@@ -1163,6 +1250,11 @@ export class Model<T> {
     return this._db.count(this);
   }
 
+  getRelationFieldData(name: string): RelationFieldData|null {
+    let f = this._relationFields.find(x => x.name === name);
+    return f == null ? null : f;
+  }
+
   /** Protected area **/
 
   protected _db: Database;
@@ -1197,26 +1289,33 @@ export class Model<T> {
     // create constraint for the foreign key
     this.addForeignKeyConstraint(foreignKey, otherModel, otherModel.getPrimaryKeyName());
 
+    function isMany(isLeft: boolean): boolean {
+      return (type === RelationType.OneToMany && isLeft) ||
+          (type === RelationType.ManyToOne && !isLeft);
+    }
+
     if (field) {
-      this._addRelationField({
-        name: field,
+      let ctor = isMany(!swapLeftRight) ? ManyRelationFieldData : SingleRelationFieldData;
+      this._addRelationField(new ctor(
+        field,
         type,
-        model: this,
-        companionModel: otherModel,
-        isLeft: !swapLeftRight,
+        this,
+        otherModel,
+        !swapLeftRight,
         foreignKey
-      } as SingleRelationFieldData);
+      ));
     }
 
     if (options && options.companionField) {
-      otherModel._addRelationField({
-        name: options.companionField,
+      let ctor = isMany(swapLeftRight) ? ManyRelationFieldData : SingleRelationFieldData;
+      otherModel._addRelationField(new ctor(
+        options.companionField,
         type,
-        model: otherModel,
-        companionModel: this,
-        isLeft: swapLeftRight,
+        otherModel,
+        this,
+        swapLeftRight,
         foreignKey
-      } as SingleRelationFieldData);
+      ));
     }
 
     return this;
@@ -1225,7 +1324,7 @@ export class Model<T> {
   protected _checkRelationFieldName(name: string): void {
     if (!isValidName(name)) {
       throw new Error(`Cannot create a relation: [${name}] is invalid name for a field`);
-    } else if (this.getFieldSpec(name) != null || this._getRelationFieldData(name) != null) {
+    } else if (this.getFieldSpec(name) != null || this.getRelationFieldData(name) != null) {
       throw new Error(`Cannot create a relation: field [${name}] is already reserved`);
     }
   }
@@ -1235,45 +1334,10 @@ export class Model<T> {
     this._relationFields.push(d);
   }
 
-  protected _getRelationFieldData(name: string): RelationFieldData|null {
-    let f = this._relationFields.find(x => x.name === name);
-    return f == null ? null : f;
-  }
-
   protected _makeInstance(inst: DatabaseInstance<T>): Instance<T> {
     // initialize relations for the instance
     for (let relation of this._relationFields) {
-      let accesser: Relation;
-      switch (relation.type) {
-        case RelationType.ManyToMany:
-          accesser = new DbMultiRelation(inst, relation as MultiRelationFieldData);
-          break;
-
-        case RelationType.OneToOne:
-          accesser = new DbSingleRelation(inst, relation as SingleRelationFieldData);
-          break;
-
-        case RelationType.ManyToOne:
-          if (relation.isLeft) {
-            accesser = new DbSingleRelation(inst, relation as SingleRelationFieldData);
-          } else {
-            accesser = new DbManyRelation(inst, relation as SingleRelationFieldData);
-          }
-          break;
-
-        case RelationType.OneToMany:
-          if (relation.isLeft) {
-            accesser = new DbManyRelation(inst, relation as SingleRelationFieldData);
-          } else {
-            accesser = new DbSingleRelation(inst, relation as SingleRelationFieldData);
-          }
-          break;
-
-        default:
-          throw new Error('Unexpected relation type');
-      }
-
-      inst.$relations.set(relation.name, accesser);
+      inst.$relations.set(relation.name, relation.createAccesser(inst));
     }
 
     return new Proxy(inst, {
@@ -1300,7 +1364,7 @@ export class Model<T> {
 }
 
 /**
- * Model specification.
+ * Model specification that a client gives to Database.define.
  * It is basically an object map of all fields.
  */
 export interface ModelSpec {
@@ -1371,6 +1435,9 @@ export interface FieldSpec {
   collation?: string;
 }
 
+/**
+ * Type hints for field specifications.
+ */
 export enum TypeHint {
   Text = 'TEXT',
   Integer = 'INTEGER',
@@ -1779,7 +1846,7 @@ export class Database {
       items: []
     };
     for (let sqlResult of sqlResults) {
-      result.items.push(model.buildFromDatabaseResult(sqlResult));
+      result.items.push(model.buildFromDatabaseResult(sqlResult, model.name));
     }
 
     // create instances for requested joins
@@ -2054,9 +2121,9 @@ abstract class QueryBuilder {
   }
 
   protected _buildMappedOperator(operator: string, left: string, right: any, parentNode: WhereTree): void {
-    let rightConv = this._model.getFieldWrapperChecked(left).convertToDatabaseForm(right);
-    QueryBuilder._expectPlain(rightConv);
-    parentNode.append(left + ' ' + operator + ' ' + this._bound.bind(rightConv));
+    let fieldData = this._attachColumn(left);
+    let rightConv = fieldData.fsw.convertToDatabaseForm(right);
+    parentNode.append(fieldData.column + ' ' + operator + ' ' + this._bound.bind(rightConv));
   }
 
   protected _buildOperator(operator: string, left: string, right: any, parentNode: WhereTree): void {
@@ -2074,11 +2141,12 @@ abstract class QueryBuilder {
         );
       } else {
         // translate to IN or NOT IN sql operators
+        let fieldData = this._attachColumn(left);
         let list = (right as any[]).map(
-            x => this._bound.bind(this._model.getFieldWrapperChecked(left).convertToDatabaseForm(x))
+            x => this._bound.bind(fieldData.fsw.convertToDatabaseForm(x))
         );
         let mapped = operator === '$in' ? 'IN' : 'NOT IN';
-        parentNode.append(left + ' ' + mapped + ' (' + list.join(', ') + ')');
+        parentNode.append(fieldData.column + ' ' + mapped + ' (' + list.join(', ') + ')');
       }
     } else {
       throw new Error(`Invalid operator [${operator}]`);
@@ -2108,11 +2176,77 @@ abstract class QueryBuilder {
     let sortOrder = order === SortOrder.Desc ? 'DESC' : 'ASC';
     return `${by} ${collation} ${sortOrder}`;
   }
-  
+
   protected _makeWhere(): string {
-    console.log(this._globalWhere.children);
     let whereClause = this._globalWhere.build();
     return whereClause ? 'WHERE ' + whereClause : '';
+  }
+
+  protected _attachColumn(fieldName: string): { fsw: FieldSpecWrapper, column: string } {
+    let sindex = fieldName.indexOf('$');
+    if (sindex < 0) {
+      return {
+        fsw: this._model.getFieldWrapperChecked(fieldName),
+        column: this._model.name + '.' + fieldName
+      };
+    } else if (sindex === 0) {
+      throw new Error('Invalid value for a field name:' + fieldName);
+    } else {
+      let relationName = fieldName.slice(0, sindex);
+      let relatedFieldName = fieldName.slice(sindex + 1);
+      if (!relationName || !relatedFieldName) {
+        throw new Error('Invalid value for a field name: ' + fieldName);
+      }
+
+      let relation = this._model.getRelationFieldData(relationName);
+      if (!relation) {
+        throw new Error(`Invalid value for a foreign field name: ${fieldName}. no relation found`);
+      }
+
+      let relatedModel = relation.companionModel;
+
+      let field = relation.companionModel.getFieldWrapper(relatedFieldName);
+      if (!field) {
+        // if we have no field on the companion model itself, we should check if the relation uses a relation model
+        // and the relation model has a field with the given name
+        if (relation.type === RelationType.ManyToMany) {
+          field = (relation as MultiRelationFieldData).relationModel.getFieldWrapper(relatedFieldName);
+          relatedModel = (relation as MultiRelationFieldData).relationModel;
+          if (!field) {
+            throw new Error(`Invalid value for a foreign field name: ${fieldName}. No relation field found`);
+          }
+        } else {
+          throw new Error(`Invalid value for a foreign field name: ${fieldName}. No relation field found`);
+        }
+      }
+
+      let table = '__sa_' + relatedModel.name;
+
+      // add join to the query
+      // if we already joined this table, we can use it again
+      if (!this._joins || !this._joins.some(x => x.alias === table)) {
+        let join = new ParsedJoin();
+        join.joinType = JoinType.Left;
+        join.sourceTable = relatedModel.name;
+        join.condition = relation.getJoinCondition(this._model, table, relatedModel);
+        join.alias = table;
+
+        this._addJoin(join);
+      }
+
+      return {
+        fsw: field,
+        column: table + '.' + relatedFieldName
+      };
+    }
+  }
+
+  protected _addJoin(jd: ParsedJoin): void {
+    if (this._joins == null) {
+      this._joins = [ jd ];
+    } else {
+      this._joins.push(jd);
+    }
   }
 }
 
@@ -2146,7 +2280,7 @@ class UpdateQueryBuilder extends QueryBuilder {
       bound: this._bound
     };
   }
-  
+
   /** Protected area **/
 
   protected _options: UpdateOptions;
@@ -2173,7 +2307,7 @@ class RemoveQueryBuilder extends QueryBuilder {
       bound: this._bound
     };
   }
-  
+
   /** Protected area **/
 
   protected _options: RemoveOptions;
@@ -2192,7 +2326,7 @@ class SelectQueryBuilder extends QueryBuilder {
     this._buildJoins();
 
     // build list of columns we should fetch from database
-    let columns: string[] = QueryBuilder._makeColumnListForModel(this._model);
+    let columns: string[] = QueryBuilder._makeColumnListForModel(this._model, this._model.name);
     if (this._extraColumns != null) {
       columns.push(...this._extraColumns);
     }
@@ -2222,7 +2356,7 @@ class SelectQueryBuilder extends QueryBuilder {
       bound: this._bound
     };
   }
-  
+
   /** Protected area **/
 
   protected _options: FindOptions;
@@ -2280,7 +2414,7 @@ class SelectQueryBuilder extends QueryBuilder {
         jd.alias = rd.name;
         jd.joinType = joinOption.type;
         jd.sourceTable = rd.companionModel.name;
-        jd.condition = joinOption.relation.getJoinCondition(this._model, rd.name);
+        jd.condition = rd.getJoinCondition(this._model, rd.name, rd.companionModel);
 
         this._addJoin(jd);
 
@@ -2304,14 +2438,6 @@ class SelectQueryBuilder extends QueryBuilder {
       this._constraints = [ constr ];
     } else {
       this._constraints.push(constr);
-    }
-  }
-
-  protected _addJoin(jd: ParsedJoin): void {
-    if (this._joins == null) {
-      this._joins = [ jd ];
-    } else {
-      this._joins.push(jd);
     }
   }
 

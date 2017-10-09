@@ -602,10 +602,10 @@ describe('Database', function() {
       await fooModel.build({ id: 3, title: 'crime' }).$flush();
       await fooModel.build({ id: 20, title: 'some item' }).$flush();
 
-      await barModel.build({ id: 10, title: 'king' }).$flush();
-      await barModel.build({ id: 20, title: 'lee '}).$flush();
-      await barModel.build({ id: 30, title: 'dost' }).$flush();
-      await barModel.build({ id: 40, title: 'person' }).$flush();
+      await barModel.build({ id: 10, name: 'king' }).$flush();
+      await barModel.build({ id: 20, name: 'lee '}).$flush();
+      await barModel.build({ id: 30, name: 'dost' }).$flush();
+      await barModel.build({ id: 40, name: 'person' }).$flush();
     });
 
     it("should create relation access objects", function () {
@@ -663,6 +663,23 @@ describe('Database', function() {
       await bar10.foo.unlink();
       (await fooModel.findByPKChecked(1)).bar.get().should.eventually.be.null;
       (await barModel.findByPKChecked(10)).foo.get().should.eventually.be.null;
+    });
+
+    it("searching by a foreign key", async function () {
+      await Promise.all([
+        (await fooModel.findByPKChecked(1)).bar.linkByPK(10),
+        (await fooModel.findByPKChecked(2)).bar.linkByPK(20),
+        (await fooModel.findByPKChecked(3)).bar.linkByPK(30)
+      ]);
+
+      let res = await fooModel.find({
+        where: {
+          bar$name: 'dost'
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 3);
     });
   });
 
@@ -788,6 +805,64 @@ describe('Database', function() {
       expect(res2.items).to.have.lengthOf(1);
       expect(res2.items[0]).to.have.property('id', 10);
     });
+
+    it("searching by a foreign field", async function () {
+      let foo = await fooModel.findByPKChecked(2);
+      await foo.bars.linkByPK(10);
+
+      let res = await fooModel.find({
+        where: {
+          bars$tag: 'king'
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 2);
+
+      res = await fooModel.find({
+        where: {
+          bars$tag: 'lee'
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(0);
+    });
+
+    it("searching by a reversed foreign field", async function () {
+      let foo = await fooModel.findByPKChecked(2);
+      await foo.bars.linkByPK(10);
+
+      let res = await barModel.find({
+        where: {
+          foo$title: 'mockingbird'
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 10);
+
+      res = await barModel.find({
+        where: {
+          foo$title: 'mist'
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(0);
+    });
+
+    it("searching by an invalid foreign field should throw", async function () {
+      await fooModel.find({
+        where: {
+          something$title: 'something'
+        }
+      }).should.eventually.be.rejected;
+
+      await fooModel.find({
+        where: {
+          bars$title: 'some title'
+        }
+      }).should.eventually.be.rejected;
+    });
   });
 
   describe("many-to-many relation", function () {
@@ -894,7 +969,7 @@ describe('Database', function() {
       expect(res.items[0]).to.have.property('id', 20);
     });
 
-    it("should like instance and relation fields", async function () {
+    it("should link instance and relation fields", async function () {
       let foo = await fooModel.findByPKChecked(1);
       await foo.bars.linkByPKUsing(10, {
         relationType: 55
@@ -934,6 +1009,49 @@ describe('Database', function() {
 
       expect(res.relationItems).to.have.lengthOf(1);
       expect(res.relationItems[0]).to.have.property('relationType', 55);
+    });
+
+    it("searching by a foreign key", async function () {
+      let foo = await fooModel.findByPKChecked(1);
+      await foo.bars.linkByPKUsing(10, {
+        relationType: 55
+      });
+
+      let res = await fooModel.find({
+        where: {
+          bars$tag: 'king'
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 1);
+
+      let res2 = await fooModel.find({
+        where: {
+          bars$relationType: 55
+        }
+      });
+
+      expect(res2.items).to.have.lengthOf(1);
+      expect(res2.items[0]).to.have.property('id', 1);
+
+      let res3 = await fooModel.find({
+        where: {
+          bars$relationType: 66
+        }
+      });
+
+      expect(res3.items).to.have.lengthOf(0);
+
+      let res4 = await fooModel.find({
+        where: {
+          bars$relationType: 55,
+          bars$tag: 'king'
+        }
+      });
+
+      expect(res4.items).to.have.lengthOf(1);
+      expect(res4.items[0]).to.have.property('id', 1);
     });
   });
 });
