@@ -117,6 +117,18 @@ export class DatabaseInstance<T> {
     return this.$fields.has(prop) || this.$relations.has(prop)
   }
 
+  $json(): any {
+    if (!this.$created) {
+      throw new Error('Instance has not been created!');
+    }
+
+    let res: any = { };
+    for (let field of this.$d.fields.keys()) {
+      res[field] = this.$d.fields.get(field);
+    }
+    return res;
+  }
+
   /** Protected area **/
 
   protected $d: {
@@ -1603,6 +1615,10 @@ export interface RemoveOptions extends QueryOptions {
 export type JoinedInstances<T> = { [name: string]: Instance<T>[] };
 
 export interface FindResult<T> {
+  /**
+   * Total count contains a number of results without limit and offset clause.
+   * Note that totalCount is always null if you don't provide fetchTotalCount = true as a search option.
+   */
   totalCount?: number|null;
   items: Instance<T>[];
   joined?: JoinedInstances<any>;
