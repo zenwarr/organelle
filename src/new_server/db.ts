@@ -117,14 +117,16 @@ export class DatabaseInstance<T> {
     return this.$fields.has(prop) || this.$relations.has(prop)
   }
 
-  $json(): any {
+  $json(includeService: boolean = false): any {
     if (!this.$created) {
       throw new Error('Instance has not been created!');
     }
 
     let res: any = { };
     for (let field of this.$d.fields.keys()) {
-      res[field] = this.$d.fields.get(field);
+      if (includeService || !this.$d.model.getFieldWrapperChecked(field).fieldSpec.serviceField) {
+        res[field] = this.$d.fields.get(field);
+      }
     }
     return res;
   }
@@ -164,7 +166,7 @@ export interface SingleRelation<T, R> extends Relation {
 /**
  * This interface allows to manipulate relations which link an instance to multiple instances of companion model.
  */
-export interface MultiRelation<T, R, RR> extends Relation {
+export interface MultiRelation<T, R, RR = void> extends Relation {
   linkUsing(value: Instance<R>, relationTemplate: { [name: string]: any }): Promise<void>;
   link(...values: Instance<R>[]): Promise<void>;
   linkByPKUsing(pk: any, relationTemplate: { [name: string]: any }): Promise<void>;
@@ -871,6 +873,10 @@ export class Model<T> {
     return fw;
   }
 
+  hasRelationField(name: string): boolean {
+    return this._relationFields.some(f => f.name === name);
+  }
+
   /**
    * Adds a new field to the model.
    * @param {string} fieldName Name of the field to add.
@@ -1018,8 +1024,14 @@ export class Model<T> {
     let leftForeignKey = options && options.leftForeignKey ? options.leftForeignKey : this.name + 'id';
     let rightForeignKey = options && options.rightForeignKey ? options.rightForeignKey : otherModel.name + 'id';
 
-    relationModel.updateField(leftForeignKey, { typeHint: TypeHint.Integer });
-    relationModel.updateField(rightForeignKey, { typeHint: TypeHint.Integer });
+    relationModel.updateField(leftForeignKey, {
+      typeHint: TypeHint.Integer,
+      serviceField: relationModel.getFieldSpec(leftForeignKey) == null
+    });
+    relationModel.updateField(rightForeignKey, {
+      typeHint: TypeHint.Integer,
+      serviceField: relationModel.getFieldSpec(rightForeignKey) == null
+    });
     relationModel.addForeignKeyConstraint(leftForeignKey, this, this.getPrimaryKeyName());
     relationModel.addForeignKeyConstraint(rightForeignKey, otherModel, otherModel.getPrimaryKeyName());
     relationModel.addUniqueConstraint([leftForeignKey, rightForeignKey]);
@@ -1297,7 +1309,7 @@ export class Model<T> {
     // create a column to hold foreign key
     let foreignKey = options && options.foreignKey ? options.foreignKey : otherModel.name + 'id';
     if (this.getFieldSpec(foreignKey) == null) {
-      this.addField(foreignKey, { typeHint: TypeHint.Integer, unique });
+      this.addField(foreignKey, { typeHint: TypeHint.Integer, unique, serviceField: true });
     } else {
       this.updateField(foreignKey, { unique });
     }
@@ -1425,7 +1437,7 @@ export interface FieldSpec {
   defaultValue?: string|number;
 
   /**
-   * Routing for generating a default value for omitted properties when building new instances.
+   * A routine for generating default values for omitted properties when building new instances.
    * When creating a new instance with Model.build function, this function is called for each field.
    * This function is called before `validate` and `serialize`.
    * @param given The value for this field as given to Model.build
@@ -1449,6 +1461,12 @@ export interface FieldSpec {
    * Collation to be used for text values.
    */
   collation?: string;
+
+  /**
+   * Used to mark service fields (for example, relation fields).
+   * If omitted, the field is considered to not be a service field.
+   */
+  serviceField?: boolean;
 }
 
 /**
@@ -1477,7 +1495,7 @@ export class FieldSpecWrapper {
 
   }
 
-  convertToDatabaseForm(value: any): any {
+  convertToDatabaseForm(value: any, strictTypes: boolean = true): any {
     let fieldSpec = this.fieldSpec;
 
     if (fieldSpec.allowNull !== false && value == null) {
@@ -1487,6 +1505,16 @@ export class FieldSpecWrapper {
     if (fieldSpec.validate != null) {
       if (!fieldSpec.validate(value)) {
         throw new Error(`Invalid value for a property value ${this.fieldName}`);
+      }
+    }
+
+    if (!strictTypes) {
+      if (fieldSpec.typeHint === TypeHint.Integer || fieldSpec.typeHint === TypeHint.Real) {
+        value = +value;
+      } else if (fieldSpec.typeHint === TypeHint.Boolean) {
+        value = !!value;
+      } else if (fieldSpec.typeHint === TypeHint.Text) {
+        value = '' + value;
       }
     }
 
@@ -1569,7 +1597,13 @@ export interface QueryOptions {
   /**
    * Search criteria
    */
-  where?: WhereCriterion
+  where?: WhereCriterion;
+
+  /**
+   * If strictTypes is false, values inside `where` can be converted to a type that matches field's type hint.
+   * By default, no conversion is made.
+   */
+  strictTypes?: boolean;
 }
 
 export enum JoinType {
@@ -2103,6 +2137,7 @@ abstract class QueryBuilder {
 
   protected _model: Model<any>;
   protected _whereClause: WhereCriterion;
+  protected _strictTypes: boolean;
   protected _globalWhere: WhereTree = new WhereTree(WhereTreeContext.Logical);
   protected _constraints: string[]|null = null;
   protected _joins: ParsedJoin[]|null = null;
@@ -2120,9 +2155,10 @@ abstract class QueryBuilder {
     ['$glob']: 'GLOB'
   });
 
-  protected constructor(model: Model<any>, whereClause?: WhereCriterion) {
+  protected constructor(model: Model<any>, whereClause?: WhereCriterion, strictTypes?: boolean) {
     this._model = model;
     this._whereClause = whereClause == null ? { } : whereClause;
+    this._strictTypes = strictTypes == null ? true : strictTypes;
   }
 
   protected _buildWhere(): void {
@@ -2201,7 +2237,7 @@ abstract class QueryBuilder {
 
   protected _buildMappedOperator(operator: string, left: string, right: any, parentNode: WhereTree): void {
     let fieldData = this._attachColumn(left);
-    let rightConv = fieldData.fsw.convertToDatabaseForm(right);
+    let rightConv = fieldData.fsw.convertToDatabaseForm(right, this._strictTypes);
     parentNode.append(fieldData.column + ' ' + operator + ' ' + this._bound.bind(rightConv));
   }
 
@@ -2222,7 +2258,7 @@ abstract class QueryBuilder {
         // translate to IN or NOT IN sql operators
         let fieldData = this._attachColumn(left);
         let list = (right as any[]).map(
-            x => this._bound.bind(fieldData.fsw.convertToDatabaseForm(x))
+            x => this._bound.bind(fieldData.fsw.convertToDatabaseForm(x, this._strictTypes))
         );
         let mapped = operator === '$in' ? 'IN' : 'NOT IN';
         parentNode.append(fieldData.column + ' ' + mapped + ' (' + list.join(', ') + ')');
@@ -2348,7 +2384,7 @@ abstract class QueryBuilder {
 
 class UpdateQueryBuilder extends QueryBuilder {
   constructor(model: Model<any>, options: UpdateOptions) {
-    super(model, options.where);
+    super(model, options.where, options.strictTypes);
     this._options = options;
   }
 
@@ -2365,7 +2401,8 @@ class UpdateQueryBuilder extends QueryBuilder {
     }
 
     let setClause: string = columns.map(
-        col => col + ' = ' + this._bound.bind(this._model.getFieldWrapperChecked(col).convertToDatabaseForm(this._options.set[col]))
+        col => col + ' = ' +
+            this._bound.bind(this._model.getFieldWrapperChecked(col).convertToDatabaseForm(this._options.set[col], this._strictTypes))
     ).join(', ');
 
     let query: string;
@@ -2392,7 +2429,7 @@ class UpdateQueryBuilder extends QueryBuilder {
 
 class RemoveQueryBuilder extends QueryBuilder {
   constructor(model: Model<any>, options: RemoveOptions) {
-    super(model, options.where);
+    super(model, options.where, options.strictTypes);
     this._options = options;
   }
 
@@ -2427,14 +2464,14 @@ class RemoveQueryBuilder extends QueryBuilder {
 
 class SelectQueryBuilder extends QueryBuilder {
   constructor(model: Model<any>, options: FindOptions) {
-    super(model, options.where);
+    super(model, options.where, options.strictTypes);
     this._options = options;
   }
 
   _buildSelect(): BuiltSelectQuery {
     this._buildWhere();
-    this._buildConstraints();
     this._buildSort();
+    this._buildConstraints();
     this._buildJoins();
 
     // build list of columns we should fetch from database

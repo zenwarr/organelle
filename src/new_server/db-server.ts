@@ -1,7 +1,8 @@
-import {Database, FindOptions, Model, SortOrder} from "./db";
+import {Database, FindOptions, Model, MultiRelation, SingleRelation, SortOrder} from "./db";
 import * as restify from 'restify';
 import * as restifyErrors from 'restify-errors';
 import {strictParseInt} from "../common/helpers";
+import * as assert from "assert";
 
 export class DatabaseServer {
   constructor(protected _db: Database, protected _port: number = 9999) {
@@ -13,7 +14,9 @@ export class DatabaseServer {
     }
 
     this._server = restify.createServer();
-    this._server.use(restify.plugins.queryParser());
+    this._server.use(restify.plugins.queryParser({
+      allowDots: true
+    }));
     this._server.use((req, resp, next) => {
       resp.header('Access-Control-Allow-Origin', '*');
       resp.header('Access-Control-Allow-Headers', 'X-Requested-With');
@@ -38,6 +41,9 @@ export class DatabaseServer {
     }
 
     this._server.get('/:model/', wrap(this._handleModel));
+    this._server.get('/:model/count/', wrap(this._handleModelCount));
+    this._server.get('/:model/id/:id/', wrap(this._handleModelInstance));
+    this._server.get('/:model/id/:id/:relname', wrap(this._handleModelRelation));
   }
 
   async start(): Promise<void> {
@@ -83,6 +89,93 @@ export class DatabaseServer {
         items: result.items.map(item => item.$json())
       }
     };
+  }
+
+  protected async _handleModelCount(params: { model?: string }, query: any): Promise<any> {
+    if (!params.model) {
+      throw new restifyErrors.BadRequestError('Invalid model');
+    }
+
+    let model = this._db.getModel(params.model);
+    if (!model) {
+      throw new restifyErrors.ResourceNotFoundError('Model not found');
+    }
+
+    let options = DatabaseServer._findOptionsFromQuery(model, query);
+    options.limit = 0;
+    options.fetchTotalCount = true;
+
+    let result = await model.find(options);
+    return {
+      errors: null,
+      data: {
+        totalCount: result.totalCount
+      }
+    };
+  }
+
+  protected async _handleModelInstance(params: { model?: string, id?: string }, query: any): Promise<any> {
+    if (!params.model || !params.id) {
+      throw new restifyErrors.BadRequestError('Invalid parameters');
+    }
+
+    let model = this._db.getModel(params.model);
+    if (!model) {
+      throw new restifyErrors.ResourceNotFoundError('Model not found');
+    }
+
+    let item = await model.findByPK(params.id);
+    if (!item) {
+      throw new restifyErrors.ResourceNotFoundError();
+    }
+
+    return {
+      data: item.$json()
+    };
+  }
+
+  protected async _handleModelRelation(params: { model?: string, id?: string, relname?: string }, query: any): Promise<any> {
+    if (!params.model || !params.relname || params.id == null) {
+      throw new restifyErrors.BadRequestError('Invalid parameters');
+    }
+
+    let model = this._db.getModel(params.model);
+    if (!model) {
+      throw new restifyErrors.ResourceNotFoundError('Model not found');
+    }
+
+    if (!model.hasRelationField(params.relname)) {
+      throw new restifyErrors.BadRequestError('Relation field not found');
+    }
+
+    let item = await model.findByPK(params.id);
+    if (!item) {
+      throw new restifyErrors.ResourceNotFoundError();
+    }
+
+    let relField = (item as any)[params.relname];
+    assert(relField != null);
+    if (relField.relationData.resultsInMany) {
+      let options = DatabaseServer._findOptionsFromQuery(model, query);
+      let result = await (relField as MultiRelation<any, any>).find(options);
+      return {
+        data: {
+          totalCount: result.totalCount,
+          items: result.items.map(x => x.$json())
+        }
+      };
+    } else {
+      let result = await (relField as SingleRelation<any, any>).get();
+      if (result) {
+        return {
+          data: result.$json()
+        };
+      } else {
+        return {
+          data: null
+        };
+      }
+    }
   }
 
   protected static _findOptionsFromQuery(model: Model<any>, query: any): FindOptions {
@@ -154,6 +247,15 @@ export class DatabaseServer {
     if (query.fetchTotal != null || query.fetchTotalCount != null) {
       result.fetchTotalCount = true;
     }
+
+    if (query.filter) {
+      if (typeof query.filter !== 'object' || query.filter == null) {
+        throw new restifyErrors.BadRequestError('Filter option is invalid');
+      }
+      result.where = query.filter;
+    }
+
+    result.strictTypes = false;
 
     return result;
   }
