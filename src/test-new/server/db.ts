@@ -1,6 +1,6 @@
 import { should, expect } from 'chai';
 import {
-  CollationNoCase, Database, Model, MultiRelation, SingleRelation, SortOrder,
+  CollationNoCase, Database, Model, MultiRelation, Savepoint, SingleRelation, SortOrder,
   TypeHint
 } from "../../new_server/db";
 import uuid = require("uuid");
@@ -1107,6 +1107,73 @@ describe('Database', function() {
       let res = await fooModel.findByPKChecked(2);
       expect(res).to.have.property('id', 2);
       expect(res).to.have.property('title', 'new title');
+    });
+  });
+
+  describe("transactions", function () {
+    interface Foo {
+      id: number;
+      name: string;
+    }
+
+    let db: Database;
+    let fooModel: Model<Foo>;
+
+    beforeEach(async function() {
+      db = await Database.open(':memory:', { shouldCreate: true });
+
+      fooModel = db.define('foo',{
+        id: { typeHint: TypeHint.Integer, primaryKey: true },
+        name: { typeHint: TypeHint.Text }
+      });
+
+      await db.flushSchema();
+    });
+
+    it("commit transaction", async function () {
+      let sp: Savepoint = await db.begin();
+
+      await fooModel.build({ id: 1, name: 'first' }).$flush();
+      await fooModel.build({ id: 2, name: 'second' }).$flush();
+
+      await sp.commit();
+
+      expect(await fooModel.findByPK(1)).to.not.be.null;
+      expect(await fooModel.findByPK(2)).to.not.be.null;
+    });
+
+    it("rollback transaction", async function () {
+      let sp: Savepoint = await db.begin();
+
+      await fooModel.build({ id: 1, name: 'first' }).$flush();
+      await fooModel.build({ id: 2, name: 'second' }).$flush();
+
+      await sp.rollback();
+
+      expect(await fooModel.findByPK(1)).to.be.null;
+      expect(await fooModel.findByPK(2)).to.be.null;
+    });
+
+    it("callback transaction", async function () {
+      let res = await db.beginCb(async () => {
+        await fooModel.build({ id: 1, name: 'first' }).$flush();
+        return 'gg';
+      });
+
+      expect(res).to.be.equal('gg');
+      expect(await fooModel.findByPK(1)).to.not.be.null;
+
+      try {
+        await db.beginCb(async () => {
+          await fooModel.build({ id: 2, name: 'second' }).$flush();
+          throw new Error('test error inside callback');
+        });
+        expect(false).to.be.true;
+      } catch (err) {
+        expect(err.message).to.be.equal('test error inside callback');
+        expect(await fooModel.findByPK(1)).to.not.be.null;
+        expect(await fooModel.findByPK(2)).to.be.null;
+      }
     });
   });
 });

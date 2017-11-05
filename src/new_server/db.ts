@@ -1671,6 +1671,18 @@ function isValidName(name: string): boolean {
   return true;
 }
 
+export class Savepoint {
+  constructor(protected _db: Database, protected _name: string) {
+
+  }
+
+  get name(): string { return this._name; }
+  get db(): Database { return this._db; }
+
+  async commit(): Promise<void> { await this.db.commitSavepoint(this.name); }
+  async rollback(): Promise<void> { await this.db.rollbackSavepoint(this.name); }
+}
+
 /**
  * Base ORM class.
  */
@@ -1897,6 +1909,53 @@ export class Database {
   async count(model: Model<any>): Promise<number> {
     let sql = `SELECT COUNT(*) FROM ${model.name}`;
     return this._prepare(sql).get()['COUNT(*)'] as number;
+  }
+
+  /**
+   * Use this function to begin a transaction.
+   * These transactions are based on SQL savepoints, so they can be nested inside each other.
+   * @returns {Promise<Savepoint>} Savepoint object which you can use to commit and rollback the current transaction
+   */
+  async begin(): Promise<Savepoint> {
+    let sp = new Savepoint(this, 'sv_' + (new Date()).getTime());
+    this._prepare('SAVEPOINT ' + sp.name).run();
+    return sp;
+  }
+
+  /**
+   * A helper wrapper based on Database.begin.
+   * It creates a transaction before calling callback which returns a promise of a value of any type.
+   * If returned promise is fullfilled, the transaction is committed.
+   * If the promise if rejected, the transactions is rollbacked.
+   * Any error thrown inside the callback will be rethrown outside this function.
+   * @param {() => Promise<any>} cb A function returning a promise of a value of any type.
+   * @returns {Promise<any>} The return value of passed callback.
+   */
+  async beginCb(cb: () => Promise<any>): Promise<any> {
+    let sp: Savepoint = await this.begin();
+
+    try {
+      let result = await cb();
+      await sp.commit();
+      return result;
+    } catch (err) {
+      await sp.rollback();
+      throw err;
+    }
+  }
+
+  async commitSavepoint(name: string): Promise<void> {
+    if (!isValidName(name)) {
+      throw new Error('Invalid savepoint name');
+    }
+    this._prepare('RELEASE ' + name).run();
+  }
+
+  async rollbackSavepoint(name: string): Promise<void> {
+    if (!isValidName(name)) {
+      throw new Error('Invalid savepoint name');
+    }
+    this._prepare('ROLLBACK TO ' + name).run();
   }
 
   /**
