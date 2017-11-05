@@ -204,6 +204,10 @@ abstract class RelationFieldData {
   companionModel: Model<any>;
   isLeft: boolean;
 
+  constructor(public resultsInMany: boolean) {
+
+  }
+
   /**
    * Builds SQL join condition.
    * @param {Model<any>} model Model on which we are doing select query.
@@ -221,7 +225,7 @@ class SingleRelationFieldData extends RelationFieldData {
   constructor(public name: string, public type: RelationType, public model: Model<any>,
               public companionModel: Model<any>, public isLeft: boolean,
               public foreignKey: string) {
-    super();
+    super(false);
   }
 
   get isCompanion(): boolean {
@@ -250,7 +254,7 @@ class ManyRelationFieldData extends RelationFieldData {
   constructor(public name: string, public type: RelationType, public model: Model<any>,
               public companionModel: Model<any>, public isLeft: boolean,
               public foreignKey: string) {
-    super();
+    super(true);
   }
 
   getJoinCondition(model: Model<any>, companionAlias: string, joinModel: Model<any>): string {
@@ -271,7 +275,7 @@ class MultiRelationFieldData extends RelationFieldData {
               public companionModel: Model<any>, public isLeft: boolean,
               public relationModel: Model<any>, public leftForeignKey: string,
               public rightForeignKey: string) {
-    super();
+    super(true);
   }
 
   getJoinCondition(model: Model<any>, companionAlias: string, joinModel: Model<any>): string {
@@ -1057,7 +1061,7 @@ export class Model<T> {
    */
   addForeignKeyConstraint(ownKey: string, foreignModel: Model<any>|string, foreignKeys: string): Model<T> {
     let modelName = typeof foreignModel === 'string' ? foreignModel : foreignModel.name;
-    this.addConstraint(`FOREIGN KEY (${ownKey}) REFERENCES ${modelName}(${foreignKeys})`);
+    this.addConstraint(`FOREIGN KEY (${ownKey}) REFERENCES ${modelName}(${foreignKeys}) ON UPDATE CASCADE ON DELETE CASCADE`);
     return this;
   }
 
@@ -2232,6 +2236,15 @@ abstract class QueryBuilder {
         join.alias = table;
 
         this._addJoin(join);
+
+        // if joining another table will produce more then one result, we should group rows by the current model id,
+        // to avoid fetching duplicates
+        if (relation.resultsInMany) {
+          // check if we have already added GROUP BY constraint
+          if (!this._constraints || !this._constraints.some(x => x.toUpperCase().startsWith('GROUP BY'))) {
+            this._addConstraint('GROUP BY ' + this._model.name + '.' + this._model.getPrimaryKeyName());
+          }
+        }
       }
 
       return {
@@ -2246,6 +2259,14 @@ abstract class QueryBuilder {
       this._joins = [ jd ];
     } else {
       this._joins.push(jd);
+    }
+  }
+
+  protected _addConstraint(constr: string): void {
+    if (this._constraints == null) {
+      this._constraints = [ constr ];
+    } else {
+      this._constraints.push(constr);
     }
   }
 }
@@ -2272,8 +2293,16 @@ class UpdateQueryBuilder extends QueryBuilder {
         col => col + ' = ' + this._bound.bind(this._model.getFieldWrapperChecked(col).convertToDatabaseForm(this._options.set[col]))
     ).join(', ');
 
+    let query: string;
     let whereClause = this._makeWhere();
-    let query = `UPDATE ${this._model.name} SET ${setClause} ${whereClause}`;
+
+    if (this._joins || this._constraints) {
+      let joins = this._joins == null ? '' : this._joins.map(x => x.make()).join(' ');
+      let pk = this._model.getPrimaryKeyName();
+      query = `UPDATE ${this._model.name} SET ${setClause} WHERE ${pk} IN (SELECT ${this._model.name}.${pk} FROM ${this._model.name} ${joins} ${whereClause})`;
+    } else {
+      query = `UPDATE ${this._model.name} SET ${setClause} ${whereClause}`;
+    }
 
     return {
       query,
@@ -2299,8 +2328,16 @@ class RemoveQueryBuilder extends QueryBuilder {
 
     this._buildWhere();
 
+    let query: string;
+
     let whereClause = this._makeWhere();
-    let query = `DELETE FROM ${this._model.name} ${whereClause}`;
+    if (this._joins || this._constraints) {
+      let joins = this._joins == null ? '' : this._joins.map(x => x.make()).join(' ');
+      let pk = this._model.getPrimaryKeyName();
+      query = `DELETE FROM ${this._model.name} WHERE ${pk} IN (SELECT ${this._model.name}.${pk} FROM ${this._model.name} ${joins} ${whereClause})`;
+    } else {
+      query = `DELETE FROM ${this._model.name} ${whereClause}`;
+    }
 
     return {
       query,
@@ -2430,14 +2467,6 @@ class SelectQueryBuilder extends QueryBuilder {
     }
     if (this._options.offset != null) {
       this._addConstraint('OFFSET ' + this._options.offset);
-    }
-  }
-
-  protected _addConstraint(constr: string): void {
-    if (this._constraints == null) {
-      this._constraints = [ constr ];
-    } else {
-      this._constraints.push(constr);
     }
   }
 

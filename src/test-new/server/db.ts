@@ -83,7 +83,7 @@ describe('Database', function() {
       });
 
       expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id))')
+          .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id) ON UPDATE CASCADE ON DELETE CASCADE)')
     });
 
     it("should automatically find a primary key to link to", function () {
@@ -99,7 +99,7 @@ describe('Database', function() {
       });
 
       expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id))');
+          .equal('CREATE TABLE foo(id INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER, fooId INTEGER UNIQUE, FOREIGN KEY (fooId) REFERENCES foo(id) ON UPDATE CASCADE ON DELETE CASCADE)');
     });
 
     it("should create one-to-many association", function () {
@@ -115,7 +115,7 @@ describe('Database', function() {
       });
 
       expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(fooId INTEGER, barId INTEGER, FOREIGN KEY (barId) REFERENCES bar(barId)); CREATE TABLE bar(barId INTEGER PRIMARY KEY)');
+          .equal('CREATE TABLE foo(fooId INTEGER, barId INTEGER, FOREIGN KEY (barId) REFERENCES bar(barId) ON UPDATE CASCADE ON DELETE CASCADE); CREATE TABLE bar(barId INTEGER PRIMARY KEY)');
     });
 
     it("should create many-to-many association", function () {
@@ -133,7 +133,7 @@ describe('Database', function() {
       });
 
       expect(db.createSchema()).to.be
-          .equal('CREATE TABLE foo(fooId INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER PRIMARY KEY); CREATE TABLE foobar(barId INTEGER, fooId INTEGER, FOREIGN KEY (barId) REFERENCES bar(barId), FOREIGN KEY (fooId) REFERENCES foo(fooId), UNIQUE(barId, fooId))');
+          .equal('CREATE TABLE foo(fooId INTEGER PRIMARY KEY); CREATE TABLE bar(barId INTEGER PRIMARY KEY); CREATE TABLE foobar(barId INTEGER, fooId INTEGER, FOREIGN KEY (barId) REFERENCES bar(barId) ON UPDATE CASCADE ON DELETE CASCADE, FOREIGN KEY (fooId) REFERENCES foo(fooId) ON UPDATE CASCADE ON DELETE CASCADE, UNIQUE(barId, fooId))');
     });
 
     it("should add timestamps", function () {
@@ -1052,6 +1052,61 @@ describe('Database', function() {
 
       expect(res4.items).to.have.lengthOf(1);
       expect(res4.items[0]).to.have.property('id', 1);
+    });
+
+    it("searching by a foreign key should not return repeating results", async function () {
+      let foo = await fooModel.findByPKChecked(2);
+      await foo.bars.linkByPKUsing(10, {
+        relationType: 55
+      });
+      await foo.bars.linkByPKUsing(20, {
+        relationType: 55
+      });
+
+      let res = await fooModel.find({
+        where: {
+          bars$relationType: 55
+        }
+      });
+
+      expect(res.items).to.have.lengthOf(1);
+    });
+
+    it("removing by a foreign key", async function () {
+      let foo = await fooModel.findByPKChecked(2);
+      await foo.bars.linkByPKUsing(10, {
+        relationType: 55
+      });
+
+      await fooModel.remove({
+        where: {
+          bars$relationType: 55
+        }
+      });
+
+      let res = await fooModel.find();
+      expect(res.items).to.have.lengthOf(1);
+      expect(res.items[0]).to.have.property('id', 1);
+    });
+
+    it("updating by a foreign key", async function () {
+      let foo = await fooModel.findByPKChecked(2);
+      await foo.bars.linkByPKUsing(10, {
+        relationType: 55
+      });
+
+      await fooModel.update({
+        where: {
+          bars$relationType: 55
+        },
+        set: {
+          title: 'new title'
+        }
+      });
+
+      let res = await fooModel.findByPKChecked(2);
+      expect(res).to.have.property('id', 2);
+      expect(res).to.have.property('title', 'new title');
     });
   });
 });
