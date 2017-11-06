@@ -41,9 +41,8 @@ export class DatabaseServer {
     }
 
     this._server.get('/:model/', wrap(this._handleModel));
-    this._server.get('/:model/count/', wrap(this._handleModelCount));
-    this._server.get('/:model/id/:id/', wrap(this._handleModelInstance));
-    this._server.get('/:model/id/:id/:relname', wrap(this._handleModelRelation));
+    this._server.get('/:model/:id/', wrap(this._handleModelInstance));
+    this._server.get('/:model/:id/:relname', wrap(this._handleModelRelation));
   }
 
   async start(): Promise<void> {
@@ -81,37 +80,21 @@ export class DatabaseServer {
 
     let options = DatabaseServer._findOptionsFromQuery(model, query);
 
-    let result = await model.find(options);
-    return {
-      errors: null,
-      data: {
-        totalCount: result.totalCount,
-        items: result.items.map(item => item.$json())
-      }
-    };
-  }
-
-  protected async _handleModelCount(params: { model?: string }, query: any): Promise<any> {
-    if (!params.model) {
-      throw new restifyErrors.BadRequestError('Invalid model');
+    if (query.includeItems === '0' && query.fetchTotalCount !== '1') {
+      return null;
     }
 
-    let model = this._db.getModel(params.model);
-    if (!model) {
-      throw new restifyErrors.ResourceNotFoundError('Model not found');
-    }
-
-    let options = DatabaseServer._findOptionsFromQuery(model, query);
-    options.limit = 0;
-    options.fetchTotalCount = true;
-
     let result = await model.find(options);
-    return {
-      errors: null,
-      data: {
-        totalCount: result.totalCount
-      }
+    let json_result: any = {
+      data: { }
     };
+    if (query.includeItems !== '0') {
+      json_result.data.items = result.items.map(item => item.$json());
+    }
+    if (options.fetchTotalCount === true) {
+      json_result.data.totalCount = result.totalCount;
+    }
+    return json_result;
   }
 
   protected async _handleModelInstance(params: { model?: string, id?: string }, query: any): Promise<any> {
@@ -134,7 +117,8 @@ export class DatabaseServer {
     };
   }
 
-  protected async _handleModelRelation(params: { model?: string, id?: string, relname?: string }, query: any): Promise<any> {
+  protected async _handleModelRelation(params: { model?: string, id?: string, relname?: string },
+                                       query: any): Promise<any> {
     if (!params.model || !params.relname || params.id == null) {
       throw new restifyErrors.BadRequestError('Invalid parameters');
     }
@@ -158,23 +142,22 @@ export class DatabaseServer {
     if (relField.relationData.resultsInMany) {
       let options = DatabaseServer._findOptionsFromQuery(model, query);
       let result = await (relField as MultiRelation<any, any>).find(options);
-      return {
-        data: {
-          totalCount: result.totalCount,
-          items: result.items.map(x => x.$json())
-        }
+
+      let json_result: any = {
+        data: { }
       };
+      if (query.includeItems !== '0') {
+        json_result.data.items = result.items.map(x => x.$json());
+      }
+      if (options.fetchTotalCount === true) {
+        json_result.data.totalCount = result.totalCount;
+      }
+      return json_result;
     } else {
       let result = await (relField as SingleRelation<any, any>).get();
-      if (result) {
-        return {
-          data: result.$json()
-        };
-      } else {
-        return {
-          data: null
-        };
-      }
+      return {
+        data: result == null ? null : result.$json()
+      };
     }
   }
 
@@ -244,8 +227,12 @@ export class DatabaseServer {
       result.limit = count;
     }
 
-    if (query.fetchTotal != null || query.fetchTotalCount != null) {
+    if (query.fetchTotalCount) {
       result.fetchTotalCount = true;
+    }
+
+    if (query.includeItems === '0') {
+      result.limit = 0;
     }
 
     if (query.filter) {

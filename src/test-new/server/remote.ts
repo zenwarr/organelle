@@ -96,9 +96,7 @@ describe("DatabaseServer", function () {
           .expect(200)
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
-              errors: null,
               data: {
-                totalCount: null,
                 items: [
                   { id: 1, name: 'first' },
                   { id: 2, name: 'second' },
@@ -121,9 +119,7 @@ describe("DatabaseServer", function () {
           .get('/foo?sort=-id')
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
-              errors: null,
               data: {
-                totalCount: null,
                 items: [
                   { id: 3, name: 'third' },
                   { id: 2, name: 'second' },
@@ -140,9 +136,7 @@ describe("DatabaseServer", function () {
           .get('/foo?sort=-')
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
-              errors: null,
               data: {
-                totalCount: null,
                 items: [
                   { id: 3, name: 'third' },
                   { id: 2, name: 'second' },
@@ -160,9 +154,7 @@ describe("DatabaseServer", function () {
           .expect(200)
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
-              errors: null,
               data: {
-                totalCount: null,
                 items: [
                   { id: 2, name: 'second' }
                 ]
@@ -178,9 +170,7 @@ describe("DatabaseServer", function () {
           .expect(200)
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
-              errors: null,
               data: {
-                totalCount: null,
                 items: [
                   { id: 2, name: 'second' },
                   { id: 3, name: 'third' }
@@ -193,10 +183,9 @@ describe("DatabaseServer", function () {
 
     it("counting", function (done) {
       supertest(server.server)
-          .get('/foo/count')
+          .get('/foo?fetchTotalCount=1&includeItems=0')
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
-              errors: null,
               data: {
                 totalCount: 3
               }
@@ -207,7 +196,7 @@ describe("DatabaseServer", function () {
 
     it("fetching information about a single item", function (done) {
       supertest(server.server)
-          .get('/foo/id/1')
+          .get('/foo/1')
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
               data: {
@@ -221,11 +210,10 @@ describe("DatabaseServer", function () {
 
     it("fetching related items", function (done) {
       supertest(server.server)
-          .get('/foo/id/2/bars')
+          .get('/foo/2/bars')
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
               data: {
-                totalCount: null,
                 items: [
                   { id: 10, name: 'bar_1' },
                   { id: 20, name: 'bar_2' }
@@ -236,9 +224,22 @@ describe("DatabaseServer", function () {
           .end(done);
     });
 
+    it("fetching related items count", function (done) {
+      supertest(server.server)
+          .get('/foo/2/bars?fetchTotalCount=1&includeItems=0')
+          .expect((resp: any) => {
+            expect(resp.body).to.be.deep.equal({
+              data: {
+                totalCount: 2
+              }
+            })
+          })
+          .end(done);
+    });
+
     it("fetch an item with foreign keys should not fetch the foreign key itself", function (done) {
       supertest(server.server)
-          .get('/baz/id/100')
+          .get('/baz/100')
           .expect((resp: any) => {
             expect(resp.body).to.be.deep.equal({
               data: {
